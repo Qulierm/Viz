@@ -32,6 +32,13 @@ let contentWidth: CGFloat = 600
 let brightThreshold = 430
 /// Minimum bright pixels in the icon band for the check to consider an icon drawn.
 let iconInkThreshold = 60
+/// Minimum accent pixels (hue within 30 degrees of 220, saturated and bright) that a
+/// surface with blue accents must show.
+let accentPixelThreshold = 60
+/// Maximum share of a render that may still use the removed flat background colour.
+let legacyShareLimit = 0.08
+/// Minimum share of non-backdrop pixels for a render to count as painted.
+let contentShareMinimum = 0.05
 /// The first action button spans x 16..125.6 pt in a 600 pt wide popover and its icon
 /// is centred at about x 70.8 pt. The measured column band is given in points and
 /// scaled by the real bitmap scale, so it covers x 60..240 device pixels at 2x.
@@ -349,6 +356,208 @@ func checkSettings() -> (passed: Bool, details: String) {
     return (false, "no visible SettingsView window after openAppSettings(selectedTab: 1) (new windows: \(created.count)\(described.isEmpty ? "" : ", \(described)"))")
 }
 
+// --- design ----------------------------------------------------------------
+
+/// The surfaces the design check renders, in both app appearances.
+enum AppSurface: String, CaseIterable {
+    case popover
+    case settings
+    case history
+    case about
+    case preview
+
+    var size: NSSize {
+        switch self {
+        case .popover: return NSSize(width: contentWidth, height: 172)
+        case .settings: return NSSize(width: 520, height: 460)
+        case .history: return NSSize(width: 500, height: 420)
+        case .about: return NSSize(width: 400, height: 450)
+        case .preview: return NSSize(width: 300, height: 200)
+        }
+    }
+
+    /// Surfaces that must show visible blue accent pixels.
+    var requiresAccent: Bool {
+        switch self {
+        case .popover, .settings, .about: return true
+        case .history, .preview: return false
+        }
+    }
+}
+
+/// Renders one surface in one appearance. The scene-level `.tint` from `VizApp` is
+/// applied here too, so the harness sees the same accent the app gives its controls.
+struct SurfaceRoot: View {
+    let surface: AppSurface
+    let scheme: ColorScheme
+
+    var body: some View {
+        content
+            .tint(VizTheme.accent)
+            .environment(\.colorScheme, scheme)
+            .preferredColorScheme(scheme)
+    }
+
+    @ViewBuilder
+    private var content: some View {
+        switch surface {
+        case .popover:
+            ContentView()
+                .environmentObject(AppServices.shared.updater)
+                .environmentObject(AppState.shared)
+                .environmentObject(HistoryState.shared)
+        case .settings:
+            SettingsView()
+                .environmentObject(AppState.shared)
+                .environmentObject(HistoryState.shared)
+                .environmentObject(AppServices.shared.updater)
+        case .history:
+            HistoryView()
+        case .about:
+            AboutView()
+        case .preview:
+            PreviewContentView()
+        }
+    }
+}
+
+/// Measurements taken from one rendered surface.
+struct DesignMetrics {
+    let contentShare: Double
+    let accentPixels: Int
+    let legacyShare: Double
+}
+
+/// The legacy flat background (display-P3 49, 52, 67) converted to the device colour
+/// space the captures use, so the comparison is against what that paint looked like.
+let legacyBackground: NSColor = {
+    let legacy = NSColor(displayP3Red: 49.0 / 255.0, green: 52.0 / 255.0, blue: 67.0 / 255.0, alpha: 1.0)
+    return legacy.usingColorSpace(.deviceRGB) ?? legacy
+}()
+
+/// Measures one composited (opaque) capture:
+///   * contentShare - share of pixels that differ from the flat window backdrop;
+///   * accentPixels - pixels within 30 degrees of hue 220 with saturation > 0.35 and
+///     brightness > 0.45, i.e. the blue accent actually being visible;
+///   * legacyShare  - share of pixels matching the removed flat background colour
+///     within 6/255 per channel.
+func designMetrics(_ rep: NSBitmapImageRep, backdrop: NSColor) -> DesignMetrics {
+    let total = rep.pixelsWide * rep.pixelsHigh
+    guard total > 0 else { return DesignMetrics(contentShare: 0, accentPixels: 0, legacyShare: 0) }
+    let base = backdrop.usingColorSpace(.deviceRGB) ?? .black
+    let legacy = legacyBackground
+    let tolerance: CGFloat = 6.0 / 255.0
+
+    var contentPixels = 0
+    var accentPixels = 0
+    var legacyPixels = 0
+
+    for y in 0..<rep.pixelsHigh {
+        for x in 0..<rep.pixelsWide {
+            guard let color = rep.colorAt(x: x, y: y)?.usingColorSpace(.deviceRGB) else { continue }
+            let dr = abs(color.redComponent - base.redComponent)
+            let dg = abs(color.greenComponent - base.greenComponent)
+            let db = abs(color.blueComponent - base.blueComponent)
+            if dr > tolerance || dg > tolerance || db > tolerance {
+                contentPixels += 1
+            }
+
+            if abs(color.redComponent - legacy.redComponent) <= tolerance,
+               abs(color.greenComponent - legacy.greenComponent) <= tolerance,
+               abs(color.blueComponent - legacy.blueComponent) <= tolerance {
+                legacyPixels += 1
+            }
+
+            var hue: CGFloat = 0
+            var saturation: CGFloat = 0
+            var brightness: CGFloat = 0
+            var alpha: CGFloat = 0
+            color.getHue(&hue, saturation: &saturation, brightness: &brightness, alpha: &alpha)
+            let degrees = hue * 360
+            let delta = abs(degrees - 220)
+            if min(delta, 360 - delta) <= 30, saturation > 0.35, brightness > 0.45 {
+                accentPixels += 1
+            }
+        }
+    }
+
+    return DesignMetrics(contentShare: Double(contentPixels) / Double(total),
+                         accentPixels: accentPixels,
+                         legacyShare: Double(legacyPixels) / Double(total))
+}
+
+func renderSurface(_ surface: AppSurface, scheme: ColorScheme) -> (rep: NSBitmapImageRep, url: URL)? {
+    let size = surface.size
+    let frame = NSRect(origin: .zero, size: size)
+    let hosting = NSHostingView(rootView: SurfaceRoot(surface: surface, scheme: scheme))
+    hosting.appearance = NSAppearance(named: scheme == .dark ? .darkAqua : .aqua)
+    hosting.frame = frame
+    hosting.layoutSubtreeIfNeeded()
+    pumpRunLoop(0.4)
+    hosting.frame = frame
+    hosting.layoutSubtreeIfNeeded()
+    hosting.displayIfNeeded()
+
+    guard let raw = hosting.bitmapImageRepForCachingDisplay(in: hosting.bounds) else { return nil }
+    hosting.cacheDisplay(in: hosting.bounds, to: raw)
+
+    let composited = compositedOverBackdrop(raw, backdrop: Backdrop.forScheme(scheme))
+    let url = outputDirectory.appendingPathComponent("design-\(surface.rawValue)-\(scheme == .dark ? "dark" : "light").png")
+    if let data = composited.representation(using: .png, properties: [:]) {
+        try? data.write(to: url)
+    }
+    return (composited, url)
+}
+
+func checkDesign() -> (passed: Bool, details: String) {
+    var failures: [String] = []
+    var summaries: [String] = []
+
+    // The harness runs with a throwaway home (see scripts/render-check.sh), so the real
+    // history file is not available. Representative entries are seeded instead, which also
+    // means the history rows are actually rendered and measured.
+    HistoryState.shared.historyItems = [
+        .text(TextItem(text: "Viz design check sample text")),
+        .color(ColorItem(hex: "#3B82F6", rgb: "(59,130,246)")),
+        .text(TextItem(text: "Second sample entry for the history list"))
+    ]
+
+    for surface in AppSurface.allCases {
+        for scheme in [ColorScheme.light, .dark] {
+            let label = "\(surface.rawValue)-\(scheme == .dark ? "dark" : "light")"
+            guard let rendered = renderSurface(surface, scheme: scheme) else {
+                failures.append("\(label):render")
+                summaries.append("\(label) RENDER-FAILED")
+                continue
+            }
+            let metrics = designMetrics(rendered.rep, backdrop: Backdrop.forScheme(scheme))
+            summaries.append(String(format: "%@ nonblank=%.1f%% accent=%d legacy=%.1f%%",
+                                    label,
+                                    metrics.contentShare * 100,
+                                    metrics.accentPixels,
+                                    metrics.legacyShare * 100))
+
+            if metrics.contentShare < contentShareMinimum {
+                failures.append("\(label):blank(\(String(format: "%.1f%%", metrics.contentShare * 100)))")
+            }
+            if surface.requiresAccent && metrics.accentPixels < accentPixelThreshold {
+                failures.append("\(label):accent(\(metrics.accentPixels))")
+            }
+            if metrics.legacyShare > legacyShareLimit {
+                failures.append("\(label):legacy(\(String(format: "%.1f%%", metrics.legacyShare * 100)))")
+            }
+
+            if debugMode {
+                print("  debug design \(label) \(rendered.url.path)")
+            }
+        }
+    }
+
+    let details = summaries.joined(separator: " | ") + (failures.isEmpty ? "" : " -> failed: \(failures.joined(separator: ", "))")
+    return (failures.isEmpty, details)
+}
+
+
 // --- clipboard -------------------------------------------------------------
 
 func checkClipboard() -> (passed: Bool, details: String) {
@@ -402,6 +611,16 @@ report("settings", settings.passed, settings.details)
 // 3. clipboard
 let clipboard = checkClipboard()
 report("clipboard", clipboard.passed, clipboard.details)
+
+// 4. design
+let design = checkDesign()
+report("design", design.passed, design.details)
+for surface in AppSurface.allCases {
+    for scheme in [ColorScheme.light, .dark] {
+        let name = "design-\(surface.rawValue)-\(scheme == .dark ? "dark" : "light").png"
+        print("    \(name) path=\(outputDirectory.appendingPathComponent(name).path)")
+    }
+}
 
 print("==> Summary: \(failures.isEmpty ? "all checks passed" : "failed checks: \(failures.joined(separator: ", "))")")
 exit(failures.isEmpty ? 0 : 1)
