@@ -459,6 +459,86 @@ func checkSettings() -> (passed: Bool, details: String) {
     return (false, "no visible SettingsView window after openAppSettings(selectedTab: 1) (new windows: \(created.count)\(described.isEmpty ? "" : ", \(described)"))")
 }
 
+// --- window size -----------------------------------------------------------
+
+/// Opens the settings window on every tab and checks that the window is as tall as the
+/// tab's content needs (or clamped to the screen), wide enough, on screen, and that its
+/// top-left corner does not move while switching tabs. This is the guard for the window
+/// that used to open at a fixed 520 pt height and slice the General tab in half.
+func checkWindowSize() -> (passed: Bool, details: String) {
+    let tabNames = ["general", "shortcuts", "updates", "about"]
+    var failures: [String] = []
+    var summaries: [String] = []
+    var previousOrigin: NSPoint?
+
+    for tab in 0...3 {
+        let name = tabNames[tab]
+        // A frame saved by an earlier run would be restored instead of the fitted size.
+        UserDefaults.standard.removeObject(forKey: "NSWindow Frame settings")
+        // Close any window from the previous iteration so each measurement is clean.
+        for window in NSApp.windows where windowHostsSettingsView(window) {
+            window.orderOut(nil)
+        }
+        UserDefaults.standard.set(tab, forKey: "settingsSelectedTab")
+        openAppSettings(selectedTab: tab)
+        pumpRunLoop(1.5)
+
+        guard let window = NSApp.windows.first(where: { windowHostsSettingsView($0) && $0.isVisible }),
+              let hosting = deepestHostingView(window.contentView) else {
+            failures.append("\(name):nowindow")
+            summaries.append("\(name) NO-WINDOW")
+            continue
+        }
+
+        let fitting = hosting.fittingSize
+        let content = window.contentLayoutRect
+        let frame = window.frame
+        let screen = window.screen ?? NSScreen.main
+        let visible = screen?.visibleFrame ?? frame
+
+        summaries.append(String(format: "%@ frame=%.0fx%.0f content=%.0fx%.0f fitting=%.0fx%.0f origin=%.0f,%.0f",
+                                name, frame.width, frame.height, content.width, content.height,
+                                fitting.width, fitting.height, frame.minX, frame.minY))
+
+        // Vertical fit: the content must be as tall as the tab needs, unless the screen
+        // cannot fit it, in which case the clamped height is accepted (the ScrollView then
+        // scrolls instead of clipping).
+        let allowedHeight = min(fitting.height, visible.height - 100)
+        if content.height < allowedHeight - 8 {
+            failures.append(String(format: "%@ height %.0f < needed %.0f", name, content.height, allowedHeight))
+        }
+
+        // Horizontal fit: the widest tab (Updates) must not be clipped.
+        if content.width < fitting.width - 8 {
+            failures.append(String(format: "%@ width %.0f < needed %.0f", name, content.width, fitting.width))
+        }
+
+        // On screen.
+        let tolerance: CGFloat = 2
+        if frame.minX < visible.minX - tolerance || frame.minY < visible.minY - tolerance
+            || frame.maxX > visible.maxX + tolerance || frame.maxY > visible.maxY + tolerance {
+            failures.append(String(format: "%@ offscreen frame=%.0f,%.0f %.0fx%.0f visible=%.0f,%.0f %.0fx%.0f",
+                                    name, frame.minX, frame.minY, frame.width, frame.height,
+                                    visible.minX, visible.minY, visible.width, visible.height))
+        }
+
+        // Top-left corner stable across tabs.
+        if let previous = previousOrigin {
+            if abs(frame.minX - previous.x) > 2 || abs(frame.maxY - previous.y) > 2 {
+                failures.append(String(format: "%@ origin moved from %.0f,%.0f to %.0f,%.0f", name, previous.x, previous.y, frame.minX, frame.maxY))
+            }
+        }
+        previousOrigin = NSPoint(x: frame.minX, y: frame.maxY)
+
+        if debugMode {
+            print("  debug windowsize \(name) frame=\(frame) content=\(content) fitting=\(fitting) visible=\(visible)")
+        }
+    }
+
+    let details = summaries.joined(separator: " | ") + (failures.isEmpty ? "" : " -> failed: \(failures.joined(separator: ", "))")
+    return (failures.isEmpty, details)
+}
+
 // --- design ----------------------------------------------------------------
 
 /// The surfaces the design check renders, in both app appearances.
@@ -864,7 +944,11 @@ report("settings", settings.passed, settings.details)
 let clipboard = checkClipboard()
 report("clipboard", clipboard.passed, clipboard.details)
 
-// 4. design
+// 4. window size
+let windowSize = checkWindowSize()
+report("windowsize", windowSize.passed, windowSize.details)
+
+// 5. design
 let design = checkDesign()
 report("design", design.passed, design.details)
 for surface in AppSurface.allCases {
