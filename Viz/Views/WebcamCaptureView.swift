@@ -207,8 +207,8 @@ struct WebcamCaptureView: View {
 
                             // Selection overlay
                             Rectangle()
-                                .stroke(Color.blue, lineWidth: 2)
-                                .background(Color.blue.opacity(0.1))
+                                .stroke(VizTheme.accent, lineWidth: 2)
+                                .background(VizTheme.accent.opacity(0.12))
                                 .frame(width: selectionRect.width, height: selectionRect.height)
                                 .position(x: selectionRect.midX, y: selectionRect.midY)
                                 .opacity(selectionRect != .zero ? 1 : 0)
@@ -272,9 +272,8 @@ struct WebcamCaptureView: View {
                         }
                         .padding(.horizontal, 12)
                         .padding(.vertical, 8)
-                        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 18))
                     }
-                    .buttonStyle(.plain)
+                    .vizGlassButton(prominent: true)
                     .disabled(!captureManager.isPreviewActive)
                     .padding(.bottom, 20)
                 }
@@ -306,10 +305,8 @@ struct WebcamCaptureView: View {
                                     }
                                     .padding(.horizontal, 12)
                                     .padding(.vertical, 8)
-                                    .background(
-                                        .ultraThinMaterial, in: RoundedRectangle(cornerRadius: 18))
                                 }
-                                .buttonStyle(.plain)
+                                .vizGlassButton()
                             } else {
                                 Image(systemName: "camera.fill")
                                     .font(.system(size: 60))
@@ -340,10 +337,8 @@ struct WebcamCaptureView: View {
                                     }
                                     .padding(.horizontal, 12)
                                     .padding(.vertical, 8)
-                                    .background(
-                                        .ultraThinMaterial, in: RoundedRectangle(cornerRadius: 18))
                                 }
-                                .buttonStyle(.plain)
+                                .vizGlassButton(prominent: true)
                                 .disabled(selectionRect == .zero)
 
                                 Button {
@@ -356,10 +351,8 @@ struct WebcamCaptureView: View {
                                     }
                                     .padding(.horizontal, 12)
                                     .padding(.vertical, 8)
-                                    .background(
-                                        .ultraThinMaterial, in: RoundedRectangle(cornerRadius: 18))
                                 }
-                                .buttonStyle(.plain)
+                                .vizGlassButton()
                                 .disabled(selectionRect == .zero)
 
                                 Button {
@@ -377,10 +370,8 @@ struct WebcamCaptureView: View {
                                     }
                                     .padding(.horizontal, 12)
                                     .padding(.vertical, 8)
-                                    .background(
-                                        .ultraThinMaterial, in: RoundedRectangle(cornerRadius: 18))
                                 }
-                                .buttonStyle(.plain)
+                                .vizGlassButton()
                             }
 
                             Spacer()
@@ -405,10 +396,8 @@ struct WebcamCaptureView: View {
                                     }
                                     .padding(.horizontal, 12)
                                     .padding(.vertical, 8)
-                                    .background(
-                                        .ultraThinMaterial, in: RoundedRectangle(cornerRadius: 18))
                                 }
-                                .buttonStyle(.plain)
+                                .vizGlassButton(prominent: true)
 
                                 Button {
                                     isSnipping = true
@@ -420,10 +409,8 @@ struct WebcamCaptureView: View {
                                     }
                                     .padding(.horizontal, 12)
                                     .padding(.vertical, 8)
-                                    .background(
-                                        .ultraThinMaterial, in: RoundedRectangle(cornerRadius: 18))
                                 }
-                                .buttonStyle(.plain)
+                                .vizGlassButton()
 
                                 Button {
                                     captureManager.clearCapturedImage()
@@ -438,10 +425,8 @@ struct WebcamCaptureView: View {
                                     }
                                     .padding(.horizontal, 12)
                                     .padding(.vertical, 8)
-                                    .background(
-                                        .ultraThinMaterial, in: RoundedRectangle(cornerRadius: 18))
                                 }
-                                .buttonStyle(.plain)
+                                .vizGlassButton()
                             }
 
                             Spacer()
@@ -477,7 +462,7 @@ struct WebcamCaptureView: View {
                             .fixedSize()
                             .padding(6)
                             .padding(.horizontal, 2)
-                            .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 8))
+                            .vizGlassSurface(cornerRadius: VizTheme.cornerSmall)
                         }
                     }
                     .padding()

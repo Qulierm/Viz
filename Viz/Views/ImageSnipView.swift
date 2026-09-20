@@ -68,19 +68,19 @@ struct ImageSnipView: View {
                     Button("Extract Text/Barcode") {
                         extractFromSelection()
                     }
-                    .buttonStyle(.borderedProminent)
+                    .vizGlassButton(prominent: true)
                     .disabled(selectionRect == .zero)
                     
                     Button("Clear Selection") {
                         selectionRect = .zero
                     }
-                    .buttonStyle(.bordered)
+                    .vizGlassButton()
                     .disabled(selectionRect == .zero)
                     
                     Button("Cancel") {
                         dismiss()
                     }
-                    .buttonStyle(.bordered)
+                    .vizGlassButton()
                 }
                 .padding()
             } else {

@@ -554,6 +554,9 @@ func checkDesign() -> (passed: Bool, details: String) {
         .color(ColorItem(hex: "#3B82F6", rgb: "(59,130,246)")),
         .text(TextItem(text: "Second sample entry for the history list"))
     ]
+    // Same reasoning for the preview panel: without captured content it renders empty.
+    RecognizedContent.shared.items = [TextItem(text: "Sample captured text for the preview panel")]
+    AppState.shared.cmdOutput = "sample post-processing output"
 
     for surface in AppSurface.allCases {
         for scheme in [ColorScheme.light, .dark] {

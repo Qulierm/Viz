@@ -35,7 +35,8 @@ struct PreviewContentView: View {
                     previewWindow?.orderOut(nil)
                     previewWindow = nil
                 }
-                .buttonStyle(SimpleButtonStyle(icon: "x.circle.fill", help: "Close", color: .primary, size: 14))
+                .vizGlassButton()
+                .help("Close")
             }
             .padding(2)
 
@@ -65,7 +66,7 @@ struct PreviewContentView: View {
                     Text("Processing Output")
                         .textCase(.uppercase)
                         .font(.footnote)
-                        .opacity(0.6)
+                        .foregroundStyle(.secondary)
                         .padding(.horizontal, 10)
                         .frame(minWidth: 150)
 
@@ -87,6 +88,8 @@ struct PreviewContentView: View {
 
             }
         }
+        .padding(6)
+        .vizGlassSurface(cornerRadius: VizTheme.cornerLarge, tint: VizTheme.accent.opacity(0.12))
         .foregroundColor(.primary)
         .material(.sidebar)
     }
@@ -105,7 +108,8 @@ struct ColorPreviewView: View {
                     previewWindow?.orderOut(nil)
                     previewWindow = nil
                 }
-                .buttonStyle(SimpleButtonStyle(icon: "x.circle.fill", help: "Close", color: .primary, size: 14))
+                .vizGlassButton()
+                .help("Close")
             }
             .padding(2)
 
@@ -114,9 +118,16 @@ struct ColorPreviewView: View {
                 Text("RGB: \(AppState.shared.colorSample.rgb)")
                 RoundedRectangle(cornerRadius: 8)
                     .fill(AppState.shared.colorSample.color)
+                    .overlay {
+                        RoundedRectangle(cornerRadius: 8)
+                            .strokeBorder(VizTheme.accent.opacity(0.45), lineWidth: 1)
+                    }
+                    .shadow(color: VizTheme.accent.opacity(0.25), radius: 4, x: 0, y: 1)
             }
             .padding([.horizontal, .bottom])
         }
+        .padding(6)
+        .vizGlassSurface(cornerRadius: VizTheme.cornerLarge, tint: VizTheme.accent.opacity(0.12))
         .foregroundColor(.primary)
         .material(.sidebar)
     }
