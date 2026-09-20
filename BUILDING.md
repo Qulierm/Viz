@@ -130,6 +130,7 @@ Other environment overrides: `VIZ_SIGN_IDENTITY` (default `-`, ad-hoc), `VIZ_INS
 | Popover buttons without icons, a gear that does nothing, or captured text that never reaches the clipboard | Run `bash scripts/render-check.sh`. It names the failing check (`icons`, `settings` or `clipboard`) and exits non-zero; see [Verifying UI behaviour without a GUI](#verifying-ui-behaviour-without-a-gui) |
 | The popover looks unstyled, or icons/accents are missing | Run `bash scripts/render-check.sh` and open `build/render-check/design-popover-*.png`: the `design` check fails when a surface renders blank, when the blue accent is missing where it belongs, or when the removed flat background colour comes back. The `icons` check fails when the popover symbols collapse again |
 | The settings tabs are squashed or unreadable | Run `bash scripts/render-check.sh`: the `tabstrip` guard measures the settings render's top strip and fails when the items no longer span the width or merge into fewer than three runs. Open `build/render-check/design-settings-dark.png` to see the strip as rendered |
+| The settings window is cut off or clipped | Run `bash scripts/render-check.sh`: the `windowsize` guard opens the real window on each tab and fails when the content is taller or wider than the window, when the window leaves the screen, or when its top-left corner moves between tabs (for example `windowsize: FAIL general height 488 < needed 761`). The window is sized to the tab by `SettingsView.fitWindowToContent()` |
 
 ## Unchanged Xcode path
 
@@ -240,6 +241,18 @@ Below the strip a divider is followed by a `ScrollView` holding the selected tab
 
 Rows therefore read as *title / subtitle / control* (switches are `Toggle("").toggleStyle(.switch).labelsHidden()`, pickers and `KeyboardShortcuts.Recorder` sit in the trailing slot). The `Spaced*` toggle styles remain in `Viz/Styles.swift` but are no longer used by the settings window. The window asks for 560x520 and the settings root carries `.frame(minWidth: 560, minHeight: 520)`, without which AppKit shrinks the window to the content's fitting size and the strip and rows end up cramped.
 
+#### The window follows the tab (supersedes the fixed size above)
+
+A fixed 520 pt window could not show the General tab: that tab's content needs **771.5 pt** (measured from the hosting view's `fittingSize`), so roughly a third of it — including the whole "System" section — was cut off below the bottom edge. The window is therefore sized to the selected tab:
+
+- **Width 690 pt**, fixed. The widest tab is Updates at 686.5 pt (AlinFoundation's `RecentReleasesView` has a large intrinsic width), so one width that fits every tab avoids horizontal resizing when switching.
+- **Height per tab**: General ≈ 772, Updates ≈ 711 (715 in the harness measurement), Shortcuts and About ≈ 452–552 pt of content. `SettingsView.fitWindowToContent()` reads the hosting view's `fittingSize.height` (the measured content height is the fallback when the view tree is unavailable), clamps it to `screen.visibleFrame.height - 100` and never below 420, adds the title-bar chrome (`frame.height - contentLayoutRect.height`) and applies the new frame.
+- **Clamping scrolls, never clips**: the content stays inside a `ScrollView`, so a screen too short for a tab scrolls the rest instead of cutting it off.
+- **Top-left corner stays put**: the new origin is computed from the old frame's `maxY` (`newOriginY = oldMaxY - newHeight`) and then clamped into `screen.visibleFrame`, so switching tabs resizes the window downwards instead of making it jump.
+- **Centred on open** (`WindowManager.open(..., center: true)`) and the title **"Viz Settings"** is shown, with the title bar still transparent.
+
+The view re-fits on open, whenever the content height changes (a `GeometryReader` preference on the tab content) and whenever `settingsSelectedTab` changes.
+
 ### Design-check additions
 
 The `design` check gained two guards for the revised rules, and the icon check now uses a different metric:
@@ -247,6 +260,7 @@ The `design` check gained two guards for the revised rules, and the icon check n
 - **`buttons`** — the share of blue-tinted pixels (hue within 30° of 220, saturation > 0.12, brightness > 0.2) inside the popover's action-button band must stay at or below 1.5 %. Neutral buttons measure 0.00 %; an accent-tinted button surface measures ~65 % and fails.
 - **`tabstrip`** — the settings surface's topmost ink region must span at least 45 % of the surface width and contain at least three separated items. The real strip measures 58 % / 4 runs; a squashed strip measures 11 % and fails.
 - The **`icons`** check now measures *luminance contrast*: pixels whose Rec. 709 luminance differs from the icon band's median by more than 40/255, counted inside the band between the button's top edge and the label. The band starts below the button's own top edge so the button chrome is not counted. The symbols are neutral now, so the earlier accent-based metric would be blind to them.
+- **`windowsize`** — opens the settings window on each of the four tabs in turn (clearing the `NSWindow Frame settings` autosave entry first so no stale frame is restored) and asserts, per tab: the window's `contentLayoutRect.height` is at least `min(fittingSize.height, screen.visibleFrame.height - 100) - 8`; its width is at least `fittingSize.width - 8` (the Updates tab needs 686.5 pt); the frame stays inside `screen.visibleFrame`; and the top-left corner does not move by more than 2 pt between tabs. Measured values: General 690x793 frame / 690x761 content / 560x772 fitting, Shortcuts 690x484 / 690x452 / 560x452, Updates 690x747 / 690x715 / 686x715, About 690x517 / 690x485 / 560x485. It fails with e.g. `windowsize: FAIL general height 488 < needed 761` — the numbers the old fixed 520 pt window produced.
 - The popover also has its own accent floor (300 pixels against the measured 1127 light / 1307 dark), stricter than the generic 60, so losing the title gradient or the update indicator fails.
 
 All artefacts — `build/render-check/design-<surface>-<appearance>.png`, `height-<H>.png` and `render-check.log` — are written under `build/render-check/`, which is gitignored.
