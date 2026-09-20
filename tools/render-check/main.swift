@@ -430,6 +430,10 @@ func deepestHostingView(_ view: NSView?) -> NSView? {
 }
 
 func checkSettings() -> (passed: Bool, details: String) {
+    // `WindowManager` gives the window an autosave name, so a frame saved by an earlier
+    // run would be restored and the check would measure that stale size instead of the
+    // size the app asks for.
+    UserDefaults.standard.removeObject(forKey: "NSWindow Frame settings")
     let before = Set(NSApp.windows.map { ObjectIdentifier($0) })
     openAppSettings(selectedTab: 1)
     pumpRunLoop(2.0)
@@ -457,7 +461,7 @@ enum AppSurface: String, CaseIterable {
     var size: NSSize {
         switch self {
         case .popover: return NSSize(width: contentWidth, height: 172)
-        case .settings: return NSSize(width: 520, height: 460)
+        case .settings: return NSSize(width: 560, height: 520)
         case .history: return NSSize(width: 500, height: 420)
         case .about: return NSSize(width: 400, height: 450)
         case .preview: return NSSize(width: 300, height: 200)

@@ -29,8 +29,8 @@ func openAppSettings(selectedTab: Int = 0) {
             .environmentObject(AppState.shared)
             .environmentObject(HistoryState.shared)
             .environmentObject(AppServices.shared.updater),
-        width: 520,
-        height: 460,
+        width: 560,
+        height: 520,
         material: .sidebar
     )
     NSApp.activate(ignoringOtherApps: true)
