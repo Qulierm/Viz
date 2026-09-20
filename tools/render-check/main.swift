@@ -47,6 +47,10 @@ let popoverAccentFloor = 300
 /// Maximum share of accent pixels inside the popover's action-button band. The buttons are
 /// neutral glass; anything blue there means the accent has crept back into the main menu.
 let buttonAccentShareLimit = 0.015
+/// Compactness ceilings for the settings window: the layout is meant to stay a normal,
+/// small macOS window, so a regression back to the old 690x793 shape has to fail.
+let settingsWindowMaxWidth: CGFloat = 560
+let settingsWindowMaxHeight: CGFloat = 700
 /// The settings tab strip must span at least this share of the surface width...
 let tabStripWidthShareMinimum = 0.45
 /// ...and must show at least this many separated items (four tabs minus tolerance).
@@ -491,6 +495,10 @@ func checkFirstOpen() -> (passed: Bool, details: String) {
     if content.width < fitting.width - 8 {
         failures.append(String(format: "width %.0f < needed %.0f", content.width, fitting.width))
     }
+    if frame.width > settingsWindowMaxWidth || frame.height > settingsWindowMaxHeight {
+        failures.append(String(format: "window %.0fx%.0f is not compact (max %.0fx%.0f)",
+                                frame.width, frame.height, settingsWindowMaxWidth, settingsWindowMaxHeight))
+    }
 
     let details = String(format: "frame=%.0fx%.0f content=%.0fx%.0f fitting=%.0fx%.0f allowedHeight=%.0f origin=%.0f,%.0f title=\"%@\"%@",
                          frame.width, frame.height, content.width, content.height,
@@ -553,6 +561,13 @@ func checkWindowSize() -> (passed: Bool, details: String) {
             failures.append(String(format: "%@ width %.0f < needed %.0f", name, content.width, fitting.width))
         }
 
+        // Compactness: the window must stay a small settings window rather than growing
+        // back to the old 690x793 shape.
+        if frame.width > settingsWindowMaxWidth || frame.height > settingsWindowMaxHeight {
+            failures.append(String(format: "%@ window %.0fx%.0f is not compact (max %.0fx%.0f)",
+                                    name, frame.width, frame.height, settingsWindowMaxWidth, settingsWindowMaxHeight))
+        }
+
         // On screen.
         let tolerance: CGFloat = 2
         if frame.minX < visible.minX - tolerance || frame.minY < visible.minY - tolerance
@@ -592,7 +607,7 @@ enum AppSurface: String, CaseIterable {
     var size: NSSize {
         switch self {
         case .popover: return NSSize(width: contentWidth, height: 172)
-        case .settings: return NSSize(width: 560, height: 520)
+        case .settings: return NSSize(width: 520, height: 700)   // the compact window, General tab
         case .history: return NSSize(width: 500, height: 420)
         case .about: return NSSize(width: 400, height: 450)
         case .preview: return NSSize(width: 300, height: 200)
