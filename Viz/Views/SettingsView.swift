@@ -26,14 +26,16 @@ struct SettingsView: View {
     @AppStorage("settingsSelectedTab") private var selectedTab: Int = 0
 
     /// Width that fits the widest tab (the Updates tab needs about 686 pt).
-    static let windowWidth: CGFloat = 690
+    static let windowWidth: CGFloat = 520
     /// Floor for the window content, used when the screen cannot fit a whole tab.
-    static let minimumContentHeight: CGFloat = 420
-    static let minimumContentWidth: CGFloat = 560
-    /// Height of the tab strip (12 pt top + item + 8 pt bottom) and of its divider.
-    static let tabStripHeight: CGFloat = 69
+    static let minimumContentHeight: CGFloat = 380
+    static let minimumContentWidth: CGFloat = 480
+    /// Height of the compact tab strip (8 pt top + item + 6 pt bottom) and of its divider.
+    static let tabStripHeight: CGFloat = 59
     static let dividerHeight: CGFloat = 1
-    static let contentPadding: CGFloat = 20
+    static let contentPadding: CGFloat = 16
+    /// Vertical gap between sections inside a tab.
+    static let sectionSpacing: CGFloat = 12
 
     @State private var window: NSWindow?
     @State private var contentHeight: CGFloat = 0
@@ -129,8 +131,8 @@ struct SettingsView: View {
             tabButton(index: 2, icon: "arrow.down.circle", title: "Updates")
             tabButton(index: 3, icon: "info.circle", title: "About")
         }
-        .padding(.top, 12)
-        .padding(.bottom, 8)
+        .padding(.top, 8)
+        .padding(.bottom, 6)
     }
 
     private func tabButton(index: Int, icon: String, title: String) -> some View {
@@ -144,7 +146,7 @@ struct SettingsView: View {
                     .font(.system(size: 11))
             }
             .frame(minWidth: 92)
-            .padding(.vertical, 8)
+            .padding(.vertical, 6)
             .background {
                 if selectedTab == index {
                     RoundedRectangle(cornerRadius: 10)
@@ -189,7 +191,7 @@ struct SettingsSection<Content: View>: View {
     @ViewBuilder let content: () -> Content
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: 4) {
             Text(title)
                 .font(.system(size: 13, weight: .semibold))
                 .padding(.leading, 4)
@@ -222,7 +224,7 @@ struct SettingsRow<Control: View>: View {
             control()
         }
         .padding(.horizontal, 14)
-        .padding(.vertical, 10)
+        .padding(.vertical, 7)
     }
 }
 
@@ -277,7 +279,7 @@ struct GeneralSettingsView: View {
     @EnvironmentObject var appState: AppState
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 18) {
+        VStack(alignment: .leading, spacing: SettingsView.sectionSpacing) {
             recognitionSection
             capturesSection
             postProcessingSection
@@ -443,7 +445,7 @@ struct UpdaterSettingsView: View {
     @EnvironmentObject private var updater: Updater
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 18) {
+        VStack(alignment: .leading, spacing: SettingsView.sectionSpacing) {
             SettingsSection(title: "Updates") {
                 SettingsRow(title: "Check for updates", subtitle: "How often Viz looks for a newer release") {
                     HStack(spacing: 8) {
@@ -454,14 +456,25 @@ struct UpdaterSettingsView: View {
                             UpdateBadge(updater: updater, hideLabel: true)
                         }
                     }
+                    // AlinFoundation's frequency view reports a wide intrinsic size (about
+                    // 678 pt), which would force the window wider; the explicit ideal keeps
+                    // the fitting size compact while the view still lays out at the width it
+                    // is actually given.
+                    .frame(minWidth: 0, idealWidth: 200, maxWidth: .infinity)
                 }
             }
 
             SettingsSection(title: "Releases") {
                 VStack(alignment: .leading, spacing: 12) {
-                    RecentReleasesView(updater: updater)
-                        .frame(height: 380)
-                        .frame(maxWidth: .infinity)
+                    // The releases list is hosted in an overlay on a flexible clear view,
+                    // so it takes the width it is given instead of its intrinsic width -
+                    // the intrinsic width is what used to force a 690 pt window.
+                    Color.clear
+                        .frame(height: 300)
+                        .overlay {
+                            RecentReleasesView(updater: updater)
+                        }
+                        .clipped()
 
                     HStack(alignment: .center, spacing: 20) {
                         Spacer()
