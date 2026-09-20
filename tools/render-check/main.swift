@@ -47,6 +47,15 @@ let popoverAccentFloor = 300
 /// Maximum share of accent pixels inside the popover's action-button band. The buttons are
 /// neutral glass; anything blue there means the accent has crept back into the main menu.
 let buttonAccentShareLimit = 0.015
+/// Ceiling for the popover's natural height. The popover measures about 161 pt after the
+/// padding trim (it was 177 pt), so this catches a regression back to the taller layout.
+let popoverHeightCeiling: CGFloat = 170
+/// Minimum number of bright pixels in the shortcut-pill band of the dark popover render.
+/// The hints are drawn in the primary label colour (white in dark), which yields ~800 such
+/// pixels; `.secondary` leaves the band almost dark, so this catches a return to grey.
+let hintBrightPixelMinimum = 150
+/// Luminance above which a pixel counts as bright hint text.
+let hintBrightLuminance = 200.0 / 255.0
 /// Compactness ceilings for the settings window: the layout is meant to stay a normal,
 /// small macOS window, so a regression back to the old 690x793 shape has to fail.
 let settingsWindowMaxWidth: CGFloat = 560
@@ -507,6 +516,44 @@ func checkFirstOpen() -> (passed: Bool, details: String) {
     return (failures.isEmpty, details)
 }
 
+// --- popover natural height -------------------------------------------------
+
+/// Measures the popover's natural size: the real `ContentView` with the app's environment
+/// objects in a hosting view at the app's width, with no height constraint, so `fittingSize`
+/// is what the popover would ask for. The popover must stay compact.
+func checkPopoverHeight(updater: Updater) -> (passed: Bool, details: String) {
+    let hosting = NSHostingView(rootView: HarnessRoot(updater: updater, scheme: .dark).frame(width: contentWidth))
+    hosting.layoutSubtreeIfNeeded()
+    pumpRunLoop(0.4)
+    hosting.layoutSubtreeIfNeeded()
+
+    let size = hosting.fittingSize
+    let passed = size.height <= popoverHeightCeiling
+    let details = String(format: "natural %.0fx%.1f (ceiling %.0f)%@",
+                         size.width, size.height, popoverHeightCeiling,
+                         passed ? "" : String(format: " -> failed: natural height %.0f > %.0f", size.height, popoverHeightCeiling))
+    return (passed, details)
+}
+
+/// Counts bright pixels in the shortcut-pill band of a popover render: the row below the
+/// action buttons. The hints must be drawn in the primary label colour, so a return to
+/// `.secondary` shows up as an almost dark band.
+func hintBrightPixels(_ rep: NSBitmapImageRep, backdrop: NSColor, bandStart: Double = 0.75, bandEnd: Double = 0.95) -> Int {
+    let y0 = Int(Double(rep.pixelsHigh) * bandStart)
+    let y1 = min(rep.pixelsHigh - 1, Int(Double(rep.pixelsHigh) * bandEnd))
+    guard y0 <= y1 else { return 0 }
+    var bright = 0
+    for y in y0...y1 {
+        for x in 0..<rep.pixelsWide {
+            guard let luminance = pixelLuminance(rep, x, y, backdrop: backdrop) else { continue }
+            if luminance > hintBrightLuminance {
+                bright += 1
+            }
+        }
+    }
+    return bright
+}
+
 // --- window size -----------------------------------------------------------
 
 /// Opens the settings window on every tab and checks that the window is as tall as the
@@ -915,6 +962,15 @@ func checkDesign() -> (passed: Bool, details: String) {
                 if measured.share > buttonAccentShareLimit {
                     failures.append("\(label):buttons accent=\(String(format: "%.1f%%", measured.share * 100)) (limit \(String(format: "%.1f%%", buttonAccentShareLimit * 100)))")
                 }
+
+                // The shortcut hints must be bright (primary label colour), not .secondary.
+                // Only the dark appearance is asserted: in light mode the whole band is
+                // bright anyway, so a count there would say nothing.
+                let hints = hintBrightPixels(rendered.rep, backdrop: Backdrop.forScheme(scheme))
+                summaries[summaries.count - 1] += " hintbright=\(hints)"
+                if scheme == .dark && hints < hintBrightPixelMinimum {
+                    failures.append("\(label):hints bright=\(hints) < \(hintBrightPixelMinimum)")
+                }
             }
 
             // The settings window must show a real tab strip across the top, not the narrow
@@ -1003,19 +1059,23 @@ for measurement in measurements {
     print("    height-\(Int(measurement.height)).png ink=\(measurement.ink) path=\(measurement.pngPath)")
 }
 
-// 2. settings
+// 2. popover natural height
+let popoverHeight = checkPopoverHeight(updater: updater)
+report("popoverheight", popoverHeight.passed, popoverHeight.details)
+
+// 3. settings
 let settings = checkSettings()
 report("settings", settings.passed, settings.details)
 
-// 3. clipboard
+// 4. clipboard
 let clipboard = checkClipboard()
 report("clipboard", clipboard.passed, clipboard.details)
 
-// 4. window size
+// 5. window size
 let windowSize = checkWindowSize()
 report("windowsize", windowSize.passed, windowSize.details)
 
-// 5. design
+// 6. design
 let design = checkDesign()
 report("design", design.passed, design.details)
 for surface in AppSurface.allCases {
