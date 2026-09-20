@@ -37,6 +37,9 @@ struct SettingsView: View {
 
     @State private var window: NSWindow?
     @State private var contentHeight: CGFloat = 0
+    /// The window is fitted once when it is captured (plus two short retries); later
+    /// updates only re-fit when the tab or the measured content height changes.
+    @State private var hasFittedWindow = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -61,6 +64,20 @@ struct SettingsView: View {
             window?.title = "Viz Settings"
             window?.titleVisibility = .visible
             self.window = window
+            // On the first open of a fresh process the content-height preference fires
+            // before the accessor has stored the window, so that fit is lost and nothing
+            // runs again: the window would stay at its initial size with the lower
+            // sections clipped. Fit once as soon as the window is captured, again on the
+            // next run-loop turn and once after the first layout pass. All three are
+            // idempotent - `fitWindowToContent()` only applies a frame that differs by
+            // more than half a point - and they run once per window, so a later user
+            // resize is not fought.
+            if !hasFittedWindow, window != nil {
+                hasFittedWindow = true
+                fitWindowToContent()
+                DispatchQueue.main.async { fitWindowToContent() }
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { fitWindowToContent() }
+            }
         })
         .onPreferenceChange(SettingsContentHeightKey.self) { height in
             contentHeight = height
