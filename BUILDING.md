@@ -128,6 +128,7 @@ Other environment overrides: `VIZ_SIGN_IDENTITY` (default `-`, ad-hoc), `VIZ_INS
 | `Address already in use`-style leftovers, or a smoke test that fails because a previous Viz is still running | An earlier run was not cleaned up. Terminate the leftover process (for example by quitting it from the menu bar) and re-run `bash scripts/smoke-test.sh` |
 | Port/process leftovers after an interrupted smoke test | `scripts/smoke-test.sh` kills its own child via an `EXIT` trap; if the script itself was killed with `SIGKILL`, close the app manually and re-run the script |
 | Popover buttons without icons, a gear that does nothing, or captured text that never reaches the clipboard | Run `bash scripts/render-check.sh`. It names the failing check (`icons`, `settings` or `clipboard`) and exits non-zero; see [Verifying UI behaviour without a GUI](#verifying-ui-behaviour-without-a-gui) |
+| The popover looks unstyled, or icons/accents are missing | Run `bash scripts/render-check.sh` and open `build/render-check/design-popover-*.png`: the `design` check fails when a surface renders blank, when the blue accent is missing where it belongs, or when the removed flat background colour comes back. The `icons` check fails when the popover symbols collapse again |
 
 ## Unchanged Xcode path
 
@@ -176,3 +177,40 @@ The three checks:
 Each check prints one `CHECK <name>: PASS|FAIL <details>` line with the numbers it measured, followed by a summary; the script exits non-zero when any check fails, so it can be used in a loop or as a pre-release gate. The rendered popover images are written to `build/render-check/height-<H>.png` (2x, so 1200 px wide) next to `build/render-check/render-check.log`, which makes a failure diagnosable by eye. The harness writes its per-user state into a throwaway home inside `$TMPDIR`, so it does not touch the real `~/Library`.
 
 The harness instantiates the same dependency (`Updater`) as the app, so on first run it fetches the pinned packages just like a normal build.
+
+## Design system
+
+Viz follows a small, explicit design system so every surface looks the same and can be checked automatically. It lives in `Viz/Logic/VizColors.swift` (kept under its original name because `Viz.xcodeproj` lists its sources explicitly).
+
+### Palette and geometry
+
+| Token | Value | Use |
+| --- | --- | --- |
+| `VizTheme.accent` | display-P3 (0.20, 0.52, 1.00) | The single accent: symbols, selection, focused controls, prominent buttons |
+| `VizTheme.accentBright` | display-P3 (0.45, 0.75, 1.00) | Lighter shade, only for the title gradients (popover and About) |
+| `VizTheme.accentSoft` | `accent` at 18 % opacity | Panel strokes, hover rings, subtle tints |
+| `VizTheme.cornerLarge` / `cornerMedium` / `cornerSmall` | 22 / 16 / 10 pt | Panels, buttons and rows respectively |
+
+Rules: the blue accent is the only accent colour, and `.red` is reserved for destructive or denied states (the History trash button, the camera-permission-denied text). Supporting text uses `.primary`/`.secondary`; no other hardcoded colours, no heavy shadows, and no gradients beyond the two title treatments.
+
+### Liquid Glass strategy
+
+Liquid Glass is macOS 26+, while Viz deploys to macOS 13, so the availability branching lives inside the theme instead of at the call sites. Three helpers cover everything:
+
+| Helper | macOS 26+ | macOS 13–25 |
+| --- | --- | --- |
+| `.vizGlassSurface(cornerRadius:tint:)` | `glassEffect(.regular[.tint(tint)], in: .rect(cornerRadius:))` behind the content | `.ultraThinMaterial` in a rounded rectangle |
+| `.vizGlassInteractive(cornerRadius:tint:)` | `glassEffect(.regular.tint(tint.opacity(0.35)).interactive(), …)` | an accent tint at 15 % |
+| `.vizGlassButton(prominent:tint:)` | `.buttonStyle(.glassProminent)` / `.buttonStyle(.glass)` | `VizMaterialButtonStyle`, a capsule with a material fill and a pressed state |
+
+Use `vizGlassSurface` for panels (settings sections, history rows, preview and About panels), `vizGlassInteractive` for custom controls that must react to hover/press (the popover action buttons), and `vizGlassButton` for anything that is a real `Button`. `.vizPill()` styles the small capsule labels (shortcut hints, the webcam camera picker). The glass is applied as a *background* layer rather than by wrapping a view in `glassEffect`, because content that is inside a glass effect is composited by the glass layer and cannot be captured by any offscreen renderer — the design checks would be blind to it.
+
+### System appearance
+
+The legacy flat background (`bg.colorset` / `mode.colorset`, display-P3 49, 52, 67) and the forced dark appearance are gone: the app follows the system appearance and the windows keep the vibrancy they already get from `WindowManager`/`.material(.sidebar)`. That is why the design checks render every surface in **both** appearances — a surface that only looks right in one of them is a bug.
+
+### Design checks
+
+`bash scripts/render-check.sh` (see [Verifying UI behaviour without a GUI](#verifying-ui-behaviour-without-a-gui)) renders every surface — popover, settings, history, about, preview — in light and dark and writes `build/render-check/design-<surface>-<appearance>.png`. The `design` check fails when a surface renders blank (less than 5 % of its pixels differ from the window backdrop), when a surface that carries the accent shows fewer than 60 accent pixels (hue within 30° of 220, saturation > 0.35, brightness > 0.45), or when the removed flat background colour reappears on more than 8 % of any render. The `icons` check measures the popover symbol the same way — accent pixels inside the first button's icon band — which is the colour the redesign draws there (this supersedes the earlier brightness-based description of that check).
+
+Note that the checks render the material path: offscreen captures cannot rasterise several Liquid Glass layers at once (a glass background wipes the siblings drawn before it), so the harness sets `VizTheme.useMaterialFallback` and measures the same layout and palette. The glass appearance itself is confirmed by the user on screen.
