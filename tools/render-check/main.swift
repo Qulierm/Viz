@@ -528,6 +528,12 @@ func designMetrics(_ rep: NSBitmapImageRep, backdrop: NSColor) -> DesignMetrics 
 }
 
 func renderSurface(_ surface: AppSurface, scheme: ColorScheme) -> (rep: NSBitmapImageRep, url: URL)? {
+    // The settings check runs before this one and selects the Shortcuts tab, but the design
+    // render should show the tab a user sees first (General), which is also where the
+    // accent-tinted controls live.
+    if surface == .settings {
+        UserDefaults.standard.set(0, forKey: "settingsSelectedTab")
+    }
     let size = surface.size
     let root = SurfaceRoot(surface: surface, scheme: scheme)
         .frame(width: size.width, height: size.height)

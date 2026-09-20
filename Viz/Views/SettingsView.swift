@@ -84,8 +84,7 @@ struct GeneralSettingsView: View {
 
     var body: some View {
         VStack(alignment: .center) {
-            GroupBox {
-                VStack(alignment: .leading, spacing: 10) {
+            VStack(alignment: .leading, spacing: 10) {
 
                     HStack {
                         Text("OCR Language")
@@ -167,7 +166,11 @@ struct GeneralSettingsView: View {
                     }
                 }
                 .padding()
-            }
+                .vizGlassSurface(cornerRadius: VizTheme.cornerLarge)
+                .overlay(
+                    RoundedRectangle(cornerRadius: VizTheme.cornerLarge)
+                        .strokeBorder(VizTheme.accentSoft, lineWidth: 1)
+                )
         }
         .padding()
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
@@ -177,8 +180,7 @@ struct GeneralSettingsView: View {
 struct ShortcutsSettingsView: View {
     var body: some View {
         VStack(alignment: .center) {
-            GroupBox {
-                VStack(spacing: 10) {
+            VStack(spacing: 10) {
                     HStack {
                         Text("Capture Content")
                         Spacer()
@@ -206,7 +208,11 @@ struct ShortcutsSettingsView: View {
                     }
                 }
                 .padding()
-            }
+                .vizGlassSurface(cornerRadius: VizTheme.cornerLarge)
+                .overlay(
+                    RoundedRectangle(cornerRadius: VizTheme.cornerLarge)
+                        .strokeBorder(VizTheme.accentSoft, lineWidth: 1)
+                )
         }
         .padding()
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
@@ -220,8 +226,7 @@ struct UpdaterSettingsView: View {
 
     var body: some View {
         VStack(alignment: .center) {
-            GroupBox {
-                VStack(alignment: .leading, spacing: 10) {
+            VStack(alignment: .leading, spacing: 10) {
 
                     HStack {
                         FrequencyView(updater: updater)
@@ -233,10 +238,7 @@ struct UpdaterSettingsView: View {
 
                     }
                     .padding()
-                    .background {
-                        RoundedRectangle(cornerRadius: 8)
-                            .fill(Color.primary.opacity(0.05))
-                    }
+                    .vizGlassSurface(cornerRadius: VizTheme.cornerSmall)
 
                     RecentReleasesView(updater: updater)
                         .frame(height: 380)
@@ -251,17 +253,23 @@ struct UpdaterSettingsView: View {
                         } label: {
                             Label("Refresh", systemImage: "arrow.uturn.left.circle")
                         }
+                        .vizGlassButton(prominent: true)
 
                         Button {
                             NSWorkspace.shared.open(URL(string: "https://github.com/alienator88/Viz/releases")!)
                         } label: {
                             Label("Releases", systemImage: "link")
                         }
+                        .vizGlassButton()
                         Spacer()
                     }
                 }
                 .padding()
-            }
+                .vizGlassSurface(cornerRadius: VizTheme.cornerLarge)
+                .overlay(
+                    RoundedRectangle(cornerRadius: VizTheme.cornerLarge)
+                        .strokeBorder(VizTheme.accentSoft, lineWidth: 1)
+                )
         }
         .padding()
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
