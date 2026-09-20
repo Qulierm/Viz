@@ -129,6 +129,7 @@ Other environment overrides: `VIZ_SIGN_IDENTITY` (default `-`, ad-hoc), `VIZ_INS
 | Port/process leftovers after an interrupted smoke test | `scripts/smoke-test.sh` kills its own child via an `EXIT` trap; if the script itself was killed with `SIGKILL`, close the app manually and re-run the script |
 | Popover buttons without icons, a gear that does nothing, or captured text that never reaches the clipboard | Run `bash scripts/render-check.sh`. It names the failing check (`icons`, `settings` or `clipboard`) and exits non-zero; see [Verifying UI behaviour without a GUI](#verifying-ui-behaviour-without-a-gui) |
 | The popover looks unstyled, or icons/accents are missing | Run `bash scripts/render-check.sh` and open `build/render-check/design-popover-*.png`: the `design` check fails when a surface renders blank, when the blue accent is missing where it belongs, or when the removed flat background colour comes back. The `icons` check fails when the popover symbols collapse again |
+| The settings tabs are squashed or unreadable | Run `bash scripts/render-check.sh`: the `tabstrip` guard measures the settings render's top strip and fails when the items no longer span the width or merge into fewer than three runs. Open `build/render-check/design-settings-dark.png` to see the strip as rendered |
 
 ## Unchanged Xcode path
 
@@ -214,3 +215,38 @@ The legacy flat background (`bg.colorset` / `mode.colorset`, display-P3 49, 52, 
 `bash scripts/render-check.sh` (see [Verifying UI behaviour without a GUI](#verifying-ui-behaviour-without-a-gui)) renders every surface — popover, settings, history, about, preview — in light and dark and writes `build/render-check/design-<surface>-<appearance>.png`. The `design` check fails when a surface renders blank (less than 5 % of its pixels differ from the window backdrop), when a surface that carries the accent shows fewer than 60 accent pixels (hue within 30° of 220, saturation > 0.35, brightness > 0.45), or when the removed flat background colour reappears on more than 8 % of any render. The `icons` check measures the popover symbol the same way — accent pixels inside the first button's icon band — which is the colour the redesign draws there (this supersedes the earlier brightness-based description of that check).
 
 Note that the checks render the material path: offscreen captures cannot rasterise several Liquid Glass layers at once (a glass background wipes the siblings drawn before it), so the harness sets `VizTheme.useMaterialFallback` and measures the same layout and palette. The glass appearance itself is confirmed by the user on screen.
+
+### Revised rules: neutral controls, accent only where it means something
+
+The first pass of the redesign tinted every control blue and that was too much, so the rules above are narrowed as follows (this supersedes the "symbols … prominent buttons" wording in the palette table and the `vizGlassInteractive` usage note):
+
+- **Neutral by default.** The popover action buttons, the shortcut pills and the header controls are grey glass with `.primary` symbols and labels. Two extra helpers cover them:
+  - `.vizGlassControl(cornerRadius:)` — neutral glass for custom controls (`glassEffect(.regular.interactive())` on macOS 26+, otherwise `.ultraThinMaterial` plus a `Color.primary.opacity(0.10)` hairline). This is what `RoundedRectangleButtonStyle` uses now.
+  - `.vizGlassBubble(size:tint:)` — a circular glass surface for the header controls, neutral unless a `tint` is passed.
+- **The blue accent is reserved for**: the app title gradients, the update-available indicator (the settings bubble tint and the arrow colour), selection states (the active settings tab, the History copy feedback and swatch outline) and the controls macOS tints itself through the app-wide `.tint` (switches, segmented selections, focus rings, the prominent buttons in the webcam overlay and the Updates tab).
+- `.red` stays reserved for destructive or denied states.
+
+### Settings window layout
+
+`SettingsView` no longer uses the stock tab bar: inside the 560x520 window `WindowManager` opens, that bar collapsed into an unreadable blob in the top strip, so the tabs are drawn explicitly as an `HStack` of icon-over-label buttons (17 pt symbol, 11 pt label, 92 pt minimum width) with a rounded selection behind the active one. The strip keeps the `settingsSelectedTab` binding, so `openAppSettings(selectedTab:)` still preselects the right tab.
+
+Below the strip a divider is followed by a `ScrollView` holding the selected tab, built from three helpers in the same file:
+
+| Helper | What it draws |
+| --- | --- |
+| `SettingsSection(title:)` | A semibold 13 pt heading above a `.vizGlassSurface(cornerRadius: 14)` panel |
+| `SettingsRow(title:subtitle:control:)` | A 13 pt title with an optional 11 pt `.secondary` subtitle on the left, the control trailing, 14 pt horizontal and 10 pt vertical padding |
+| `SettingsRowDivider` | A 0.35-opacity divider indented 14 pt, placed between rows and never after the last one |
+
+Rows therefore read as *title / subtitle / control* (switches are `Toggle("").toggleStyle(.switch).labelsHidden()`, pickers and `KeyboardShortcuts.Recorder` sit in the trailing slot). The `Spaced*` toggle styles remain in `Viz/Styles.swift` but are no longer used by the settings window. The window asks for 560x520 and the settings root carries `.frame(minWidth: 560, minHeight: 520)`, without which AppKit shrinks the window to the content's fitting size and the strip and rows end up cramped.
+
+### Design-check additions
+
+The `design` check gained two guards for the revised rules, and the icon check now uses a different metric:
+
+- **`buttons`** — the share of blue-tinted pixels (hue within 30° of 220, saturation > 0.12, brightness > 0.2) inside the popover's action-button band must stay at or below 1.5 %. Neutral buttons measure 0.00 %; an accent-tinted button surface measures ~65 % and fails.
+- **`tabstrip`** — the settings surface's topmost ink region must span at least 45 % of the surface width and contain at least three separated items. The real strip measures 58 % / 4 runs; a squashed strip measures 11 % and fails.
+- The **`icons`** check now measures *luminance contrast*: pixels whose Rec. 709 luminance differs from the icon band's median by more than 40/255, counted inside the band between the button's top edge and the label. The band starts below the button's own top edge so the button chrome is not counted. The symbols are neutral now, so the earlier accent-based metric would be blind to them.
+- The popover also has its own accent floor (300 pixels against the measured 1127 light / 1307 dark), stricter than the generic 60, so losing the title gradient or the update indicator fails.
+
+All artefacts — `build/render-check/design-<surface>-<appearance>.png`, `height-<H>.png` and `render-check.log` — are written under `build/render-check/`, which is gitignored.
