@@ -127,7 +127,52 @@ Other environment overrides: `VIZ_SIGN_IDENTITY` (default `-`, ad-hoc), `VIZ_INS
 | The app launches but shows no window | Expected: Viz is a menu bar app (`LSUIElement = true`). Look for its icon in the menu bar, not in the Dock |
 | `Address already in use`-style leftovers, or a smoke test that fails because a previous Viz is still running | An earlier run was not cleaned up. Terminate the leftover process (for example by quitting it from the menu bar) and re-run `bash scripts/smoke-test.sh` |
 | Port/process leftovers after an interrupted smoke test | `scripts/smoke-test.sh` kills its own child via an `EXIT` trap; if the script itself was killed with `SIGKILL`, close the app manually and re-run the script |
+| Popover buttons without icons, a gear that does nothing, or captured text that never reaches the clipboard | Run `bash scripts/render-check.sh`. It names the failing check (`icons`, `settings` or `clipboard`) and exits non-zero; see [Verifying UI behaviour without a GUI](#verifying-ui-behaviour-without-a-gui) |
 
 ## Unchanged Xcode path
 
 The headless build is additive only. `Viz.xcodeproj/project.pbxproj`, its shared schemes (`Viz Debug`, `Viz Release`), `Viz.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved`, `Viz/Info.plist`, `Viz/Viz.entitlements` and `Viz/Assets.xcassets` are untouched, so opening the project in Xcode still builds exactly as before. The only source change made for the headless path is `Viz/Logic/VizColors.swift` plus the seven call sites that used to look up colors in the asset catalog; those colors resolve identically under Xcode.
+
+## macOS 27 compatibility fixes
+
+Three defects appeared when Viz 2.3.3 was run on macOS 27. All three are fixed in the shared sources, so both build paths (Xcode and headless) get the fixes.
+
+### Popover button icons disappeared
+
+**Symptom:** the five action buttons in the menu bar popover showed their labels and shortcut pills but no SF Symbols, while the header gear/close icons still rendered.
+
+**Root cause:** `RoundedRectangleButtonStyle` sized its symbol with `.resizable().aspectRatio(contentMode: .fit).frame(width: size)`. A resizable symbol has no intrinsic size, so it is the first thing the layout squeezes when vertical space is tight — and the popover on macOS 27 hands out less height than the content asks for. Measuring the real `ContentView` at decreasing heights showed the icon band going from ink to nothing while the labels survived.
+
+**Fix:** the symbol is now font-sized with an explicit square slot and made rigid — `.font(.system(size: size))`, `.frame(width: size, height: size)`, `.fixedSize()`. Point sizes, paddings and spacing are unchanged, so the popover looks exactly as before wherever the old code rendered correctly. The same hardening was applied to `SimpleButtonBrightStyle`, `SimpleButtonStyle` and `InfoButton`.
+
+### The gear never opened the settings window
+
+**Symptom:** clicking the gear stored the selected tab but nothing appeared.
+
+**Root cause:** `openAppSettings()` in `Viz/Logic/Windows.swift` declared `@Environment(\.openSettings)` inside a free function. That property wrapper only resolves inside a `View` body; anywhere else SwiftUI hands back the default action, which does not present the `Settings` scene, so the call was silently swallowed.
+
+**Fix:** the settings now open in a regular window through the same `WindowManager.shared.open(...)` path that already works for History and About, with `AppState.shared`, `HistoryState.shared` and a single shared `Updater` from `AppServices.shared` injected as environment objects. `VizApp` uses that same shared updater, so both windows observe one instance.
+
+### Captured text did not reach the clipboard
+
+**Symptom:** text recognised by OCR was not available to paste, even though captures succeeded.
+
+**Root cause:** two separate issues. The pasteboard write in `copyTextItemsToClipboard(textItems:)` was never verified — a failed write left the clipboard cleared with no error anywhere — and the preview window was a borderless `NSWindow`, which cannot become key, so its selectable text could never receive ⌘C.
+
+**Fix:** the write is now verified by reading the value back, and falls back to writing through `/usr/bin/pbcopy` in a separate process; failures are surfaced through `printOS` and `AppState.shared.cmdOutput` instead of being ignored. The preview window is now a `KeyablePreviewWindow` (`canBecomeKey == true`, `canBecomeMain == false`) with identical visuals, and its auto-hide is postponed while the window is key so it is not pulled away mid-selection.
+
+## Verifying UI behaviour without a GUI
+
+`bash scripts/render-check.sh` checks the three behaviours above objectively, without a human at the screen. It builds the application's **real sources** — every Swift file under `Viz/` except `VizApp.swift`, which carries `@main`, plus `tools/render-check/*.swift` — in a temporary SwiftPM package under `${TMPDIR:-/tmp}/viz-render-check`, reusing the repository's caches and the same `#Preview` patch as `scripts/prepare-deps.sh`. The repository itself is never modified.
+
+The three checks:
+
+| Check | What it does |
+| --- | --- |
+| `icons` | Renders the real `ContentView` at 600 pt wide with popover heights 172, 165, 158 and 150 and counts bright pixels (R+G+B > 430) in the first button's icon band. The band is located from the render itself: the topmost ink run is the always-present header and the widest run below it is the label, so the rows in between are exactly where a symbol must draw. A symbol that collapses leaves that band empty. |
+| `settings` | Calls the app's own `openAppSettings(selectedTab: 1)` and then looks for a window created by that call that is visible and hosts `SettingsView` (found through the view tree, because a window created with a material keeps its hosting view inside a visual-effect container). |
+| `clipboard` | Calls the app's own `copyTextItemsToClipboard(textItems:)` and reads the value back from a **separate** `/usr/bin/pbpaste` process, then shows the preview window and asserts `previewWindow?.canBecomeKey == true`. |
+
+Each check prints one `CHECK <name>: PASS|FAIL <details>` line with the numbers it measured, followed by a summary; the script exits non-zero when any check fails, so it can be used in a loop or as a pre-release gate. The rendered popover images are written to `build/render-check/height-<H>.png` (2x, so 1200 px wide) next to `build/render-check/render-check.log`, which makes a failure diagnosable by eye. The harness writes its per-user state into a throwaway home inside `$TMPDIR`, so it does not touch the real `~/Library`.
+
+The harness instantiates the same dependency (`Updater`) as the app, so on first run it fetches the pinned packages just like a normal build.
