@@ -127,7 +127,9 @@ extension View {
             .padding(.vertical, 3)
             .background(.ultraThinMaterial, in: Capsule())
             .overlay(Capsule().strokeBorder(Color.primary.opacity(0.12), lineWidth: 1))
-            .foregroundStyle(.secondary)
+            // Primary, not .secondary: the shortcut hints are meant to read as labels. That
+            // is white in the dark popover and black in light, so it stays readable in both.
+            .foregroundStyle(.primary)
     }
 }
 

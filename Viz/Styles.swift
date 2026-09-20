@@ -145,7 +145,8 @@ struct RoundedRectangleButtonStyle: ButtonStyle {
             }
             Spacer()
         }
-        .padding()
+        .padding(.horizontal, 16)
+        .padding(.vertical, 12)
         .vizGlassControl(cornerRadius: VizTheme.cornerMedium)
         .foregroundColor(.primary)
         .overlay(

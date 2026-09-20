@@ -73,7 +73,7 @@ struct ContentView: View {
 
 
             HStack(spacing: 8) {
-                VStack {
+                VStack(spacing: 6) {
                     Button("Capture") {
                         CaptureService.shared.captureContent()
                         dismiss()
@@ -86,7 +86,7 @@ struct ContentView: View {
                 }
 
 
-                VStack {
+                VStack(spacing: 6) {
                     Button("Webcam") {
                         dismiss()
                         openWebcamCapture()
@@ -98,7 +98,7 @@ struct ContentView: View {
 
                 }
 
-                VStack {
+                VStack(spacing: 6) {
                     Button("Color") {
                         dismiss()
                         processColor()
@@ -109,7 +109,7 @@ struct ContentView: View {
                     ShortcutEditorView(name: .eyedropper)
                 }
 
-                VStack {
+                VStack(spacing: 6) {
                     Button("History") {
                         openHistory()
                         dismiss()
@@ -121,7 +121,7 @@ struct ContentView: View {
 
                 }
 
-                VStack {
+                VStack(spacing: 6) {
                     Button("Clear") {
                         clearClipboard()
                     }
@@ -132,7 +132,8 @@ struct ContentView: View {
                 }
 
             }
-            .padding([.horizontal, .bottom, .top])
+            .padding(.horizontal, 16)
+            .padding(.vertical, 13)
 
 
         }
