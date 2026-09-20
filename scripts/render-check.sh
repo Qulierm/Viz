@@ -145,10 +145,24 @@ FAKE_HOME="$WORK/home"
 rm -rf "$FAKE_HOME"
 mkdir -p "$FAKE_HOME"
 set +e
-CFFIXED_USER_HOME="$FAKE_HOME" RENDER_CHECK_OUT="$OUT_DIR" "$SCRATCH/release/RenderCheck" 2>&1 | tee "$OUT_DIR/render-check.log"
-STATUS=${PIPESTATUS[0]}
+echo "==> RenderCheck (full suite)"
+CFFIXED_USER_HOME="$FAKE_HOME" RENDER_CHECK_OUT="$OUT_DIR" RENDER_CHECK_MODE=full \
+  "$SCRATCH/release/RenderCheck" 2>&1 | tee "$OUT_DIR/render-check.log"
+FULL_STATUS=${PIPESTATUS[0]}
+
+# A second, separate process whose very first action is opening the settings window: the
+# warm checks above cannot see a first-open sizing race.
+echo "==> RenderCheck (cold window, fresh process)"
+CFFIXED_USER_HOME="$FAKE_HOME" RENDER_CHECK_OUT="$OUT_DIR" RENDER_CHECK_MODE=cold-window \
+  "$SCRATCH/release/RenderCheck" 2>&1 | tee -a "$OUT_DIR/render-check.log"
+COLD_STATUS=${PIPESTATUS[0]}
 set -e
 
-echo "==> RenderCheck exit code: $STATUS"
+echo "==> RenderCheck (full) exit $FULL_STATUS"
+echo "==> RenderCheck (cold window) exit $COLD_STATUS"
 echo "==> Artefacts: $OUT_DIR"
-exit "$STATUS"
+
+if [[ "$FULL_STATUS" != "0" || "$COLD_STATUS" != "0" ]]; then
+  exit 1
+fi
+exit 0

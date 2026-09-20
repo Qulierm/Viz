@@ -459,6 +459,46 @@ func checkSettings() -> (passed: Bool, details: String) {
     return (false, "no visible SettingsView window after openAppSettings(selectedTab: 1) (new windows: \(created.count)\(described.isEmpty ? "" : ", \(described)"))")
 }
 
+// --- first open (cold start) ------------------------------------------------
+
+/// Opens the settings window as the very first action of a fresh process and measures it.
+/// This is the path a user takes (launch Viz, click the gear): the window accessor and the
+/// content-height preference have not run yet, so the first fit used to be lost and the
+/// window stayed at its initial size with the lower sections clipped.
+func checkFirstOpen() -> (passed: Bool, details: String) {
+    // A frame saved by an earlier run would be restored instead of the fitted size.
+    UserDefaults.standard.removeObject(forKey: "NSWindow Frame settings")
+    let before = Set(NSApp.windows.map { ObjectIdentifier($0) })
+
+    openAppSettings(selectedTab: 0)
+    pumpRunLoop(1.5)
+
+    guard let window = NSApp.windows.first(where: { !before.contains(ObjectIdentifier($0)) && windowHostsSettingsView($0) && $0.isVisible }),
+          let hosting = deepestHostingView(window.contentView) else {
+        return (false, "no settings window appeared after openAppSettings(selectedTab: 0)")
+    }
+
+    let fitting = hosting.fittingSize
+    let content = window.contentLayoutRect
+    let frame = window.frame
+    let visible = (window.screen ?? NSScreen.main)?.visibleFrame ?? frame
+    let allowedHeight = min(fitting.height, visible.height - 100)
+
+    var failures: [String] = []
+    if content.height < allowedHeight - 8 {
+        failures.append(String(format: "height %.0f < needed %.0f", content.height, allowedHeight))
+    }
+    if content.width < fitting.width - 8 {
+        failures.append(String(format: "width %.0f < needed %.0f", content.width, fitting.width))
+    }
+
+    let details = String(format: "frame=%.0fx%.0f content=%.0fx%.0f fitting=%.0fx%.0f allowedHeight=%.0f origin=%.0f,%.0f title=\"%@\"%@",
+                         frame.width, frame.height, content.width, content.height,
+                         fitting.width, fitting.height, allowedHeight, frame.minX, frame.minY, window.title,
+                         failures.isEmpty ? "" : " -> failed: " + failures.joined(separator: ", "))
+    return (failures.isEmpty, details)
+}
+
 // --- window size -----------------------------------------------------------
 
 /// Opens the settings window on every tab and checks that the window is as tall as the
@@ -907,15 +947,27 @@ func checkClipboard() -> (passed: Bool, details: String) {
 
 // MARK: - Main
 
+let application = NSApplication.shared
+application.setActivationPolicy(.accessory)
+
+// `RENDER_CHECK_MODE=cold-window` measures the first settings window of a fresh process and
+// does nothing else first: no icon renders, no settings check, no design renders, so the
+// window accessor and the content-height preference really are cold when it opens.
+if (ProcessInfo.processInfo.environment["RENDER_CHECK_MODE"] ?? "full") == "cold-window" {
+    print("==> RenderCheck (cold window)")
+    print("==> Working directory: \(rootPath)")
+    let cold = checkFirstOpen()
+    report("firstopen", cold.passed, cold.details)
+    print("==> Summary: \(failures.isEmpty ? "all checks passed" : "failed checks: \(failures.joined(separator: ", "))")")
+    exit(failures.isEmpty ? 0 : 1)
+}
+
 // Offscreen captures cannot rasterise several Liquid Glass layers at once: a glass
 // background wipes the siblings that were drawn before it, which would hide the popover
 // header and make the measurements meaningless. The checks therefore render the theme's
 // translucent-material path, which is the same layout and palette; the glass appearance
 // itself is confirmed by the user on screen.
 VizTheme.useMaterialFallback = true
-
-let application = NSApplication.shared
-application.setActivationPolicy(.accessory)
 
 try? fileManager.createDirectory(at: outputDirectory, withIntermediateDirectories: true)
 
