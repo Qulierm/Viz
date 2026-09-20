@@ -18,8 +18,7 @@ struct VizApp: App {
     var body: some Scene {
         MenuBarExtra("Viz", systemImage: updater.updateAvailable ? "arrow.down.circle" : "eye", content: {
             ContentView()
-                .environment(\.colorScheme, .dark)
-                .preferredColorScheme(.dark)
+                .tint(VizTheme.accent)
                 .environmentObject(updater)
                 .environmentObject(appState)
                 .environmentObject(HistoryState.shared)
@@ -28,6 +27,7 @@ struct VizApp: App {
         
         Settings {
             SettingsView()
+                .tint(VizTheme.accent)
                 .environmentObject(appState)
                 .environmentObject(HistoryState.shared)
                 .environmentObject(updater)

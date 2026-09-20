@@ -88,7 +88,7 @@ struct ImageSnipView: View {
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
-        .background(Color.vizBackground)
+        .vizGlassSurface()
         .onAppear {
             loadImage()
         }

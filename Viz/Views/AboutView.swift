@@ -48,9 +48,6 @@ struct AboutView: View {
         }
 //        .ignoresSafeArea(edges: .top)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(Color.vizBackground)
-        .environment(\.colorScheme, .dark)
-        .preferredColorScheme(.dark)
 
     }
 }

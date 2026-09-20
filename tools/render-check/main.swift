@@ -68,12 +68,30 @@ func shell(_ executable: String, _ arguments: [String] = []) -> (status: Int32, 
     return (process.terminationStatus, String(data: data, encoding: .utf8) ?? "")
 }
 
-/// R + G + B of a bitmap pixel, or nil when the coordinates are outside the bitmap.
-func pixelSum(_ rep: NSBitmapImageRep, _ x: Int, _ y: Int) -> Int? {
+/// R + G + B of a bitmap pixel composited over a backdrop, or nil when the coordinates
+/// are outside the bitmap. The app's surfaces are translucent by design (Liquid Glass /
+/// materials over window vibrancy), and `colorAt` returns un-premultiplied components,
+/// so a 10 % white fill would otherwise read as pure white. Compositing reproduces what
+/// the user actually sees.
+func pixelSum(_ rep: NSBitmapImageRep, _ x: Int, _ y: Int, backdrop: NSColor = Backdrop.dark) -> Int? {
     guard x >= 0, y >= 0, x < rep.pixelsWide, y < rep.pixelsHigh else { return nil }
     guard let color = rep.colorAt(x: x, y: y)?.usingColorSpace(.deviceRGB) else { return nil }
-    let sum = color.redComponent + color.greenComponent + color.blueComponent
-    return Int((sum * 255).rounded())
+    let alpha = color.alphaComponent
+    let base = backdrop.usingColorSpace(.deviceRGB) ?? .black
+    let red = color.redComponent * alpha + base.redComponent * (1 - alpha)
+    let green = color.greenComponent * alpha + base.greenComponent * (1 - alpha)
+    let blue = color.blueComponent * alpha + base.blueComponent * (1 - alpha)
+    return Int(((red + green + blue) * 255).rounded())
+}
+
+/// Window backdrop a surface is drawn over, matching the appearance being rendered.
+enum Backdrop {
+    static let dark = NSColor(srgbRed: 0.13, green: 0.13, blue: 0.15, alpha: 1)
+    static let light = NSColor(srgbRed: 0.93, green: 0.93, blue: 0.94, alpha: 1)
+
+    static func forScheme(_ scheme: ColorScheme) -> NSColor {
+        scheme == .dark ? dark : light
+    }
 }
 
 func brightCount(_ rep: NSBitmapImageRep, xRange: ClosedRange<Int>, yRange: ClosedRange<Int>) -> Int {
@@ -108,6 +126,40 @@ struct RenderResult {
     let scale: CGFloat
 }
 
+/// Draws a translucent capture over a backdrop and returns an opaque bitmap. Both the
+/// measurements and the PNG artefacts use this, so the numbers describe what the user
+/// sees and the PNGs can be inspected without a viewer that understands alpha.
+func compositedOverBackdrop(_ rep: NSBitmapImageRep, backdrop: NSColor) -> NSBitmapImageRep {
+    let width = rep.pixelsWide
+    let height = rep.pixelsHigh
+    guard let out = NSBitmapImageRep(bitmapDataPlanes: nil,
+                                     pixelsWide: width,
+                                     pixelsHigh: height,
+                                     bitsPerSample: 8,
+                                     samplesPerPixel: 4,
+                                     hasAlpha: true,
+                                     isPlanar: false,
+                                     colorSpaceName: .deviceRGB,
+                                     bytesPerRow: 0,
+                                     bitsPerPixel: 0) else {
+        return rep
+    }
+    out.size = rep.size
+    guard let context = NSGraphicsContext(bitmapImageRep: out) else { return rep }
+    NSGraphicsContext.saveGraphicsState()
+    NSGraphicsContext.current = context
+    backdrop.setFill()
+    NSRect(x: 0, y: 0, width: rep.size.width, height: rep.size.height).fill()
+    // `rep.draw(in:)` would copy the transparent pixels over the backdrop, so the capture
+    // has to be drawn as an image with an explicit source-over operation.
+    let image = NSImage(size: rep.size)
+    image.addRepresentation(rep)
+    image.draw(in: NSRect(x: 0, y: 0, width: rep.size.width, height: rep.size.height),
+               from: .zero, operation: .sourceOver, fraction: 1.0)
+    NSGraphicsContext.restoreGraphicsState()
+    return out
+}
+
 func renderPopover(height: CGFloat, updater: Updater) -> RenderResult? {
     let frame = NSRect(x: 0, y: 0, width: contentWidth, height: height)
 
@@ -124,11 +176,12 @@ func renderPopover(height: CGFloat, updater: Updater) -> RenderResult? {
     hosting.layoutSubtreeIfNeeded()
     hosting.displayIfNeeded()
 
-    guard let rep = hosting.bitmapImageRepForCachingDisplay(in: hosting.bounds) else {
+    guard let raw = hosting.bitmapImageRepForCachingDisplay(in: hosting.bounds) else {
         return nil
     }
-    hosting.cacheDisplay(in: hosting.bounds, to: rep)
+    hosting.cacheDisplay(in: hosting.bounds, to: raw)
 
+    let rep = compositedOverBackdrop(raw, backdrop: Backdrop.dark)
     let url = outputDirectory.appendingPathComponent("height-\(Int(height)).png")
     if let data = rep.representation(using: .png, properties: [:]) {
         try? data.write(to: url)
