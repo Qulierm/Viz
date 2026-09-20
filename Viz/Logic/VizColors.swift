@@ -24,6 +24,21 @@ enum VizTheme {
     /// Soft accent for tints, hover fills and pills.
     static let accentSoft = accent.opacity(0.18)
 
+    /// The original Viz surface colour (display-P3 #313443) from the pre-redesign palette.
+    /// It is used only as a translucent glass tint, so the Liquid Glass surfaces keep the
+    /// app's classic dark blue-grey identity instead of being painted flat again.
+    static let surface = Color(.displayP3, red: 49.0 / 255.0, green: 52.0 / 255.0, blue: 67.0 / 255.0, opacity: 1.0)
+    /// Stronger tint for full-window and popover roots.
+    static let surfaceTint = surface.opacity(0.40)
+    /// Lighter tint for cards, rows and panels, so the hierarchy stays readable.
+    static let cardTint = surface.opacity(0.22)
+    /// The original brand gradient, used by the popover and About titles.
+    static let brandGradient = LinearGradient(colors: [.red, .purple, .blue], startPoint: .leading, endPoint: .trailing)
+    /// Update indicator and copy confirmation.
+    static let success = Color.green
+    /// URLs, webcam selection and the About button.
+    static let link = Color.blue
+
     static let cornerLarge: CGFloat = 22
     static let cornerMedium: CGFloat = 16
     static let cornerSmall: CGFloat = 10

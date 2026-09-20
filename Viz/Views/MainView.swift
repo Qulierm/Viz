@@ -29,12 +29,12 @@ struct ContentView: View {
                     .bold()
                     .foregroundStyle(
                         LinearGradient(
-                            colors: [VizTheme.accent, VizTheme.accentBright],
+                            colors: [.red, .purple, .blue],
                             startPoint: .leading,
                             endPoint: .trailing
                         )
                     )
-                    .shadow(color: VizTheme.accent.opacity(0.35), radius: 3, x: 0, y: 1)
+                    .shadow(color: .black.opacity(0.35), radius: 3, x: 0, y: 1)
                     .padding(.leading, 5)
 
 
@@ -48,10 +48,10 @@ struct ContentView: View {
                     } label: {
                         Image(systemName: updater.updateAvailable ? "arrow.down.circle" : "gear")
                             .font(.system(size: 17))
-                            .vizGlassBubble(tint: updater.updateAvailable ? VizTheme.accent.opacity(0.35) : nil)
+                            .vizGlassBubble(tint: updater.updateAvailable ? VizTheme.success.opacity(0.35) : nil)
                     }
                     .buttonStyle(.plain)
-                    .foregroundStyle(updater.updateAvailable ? VizTheme.accent : .secondary)
+                    .foregroundStyle(updater.updateAvailable ? VizTheme.success : .secondary)
 
                     Button {
                         NSApp.terminate(nil)
@@ -137,6 +137,9 @@ struct ContentView: View {
 
 
         }
+        // The popover keeps the classic Viz surface as a translucent glass tint: the panel
+        // reads as the app's dark blue-grey while still sampling what is behind it.
+        .vizGlassSurface(cornerRadius: 0, tint: VizTheme.surfaceTint)
         .frame(width: 600)
     }
 }

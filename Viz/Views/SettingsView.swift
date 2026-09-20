@@ -59,6 +59,9 @@ struct SettingsView: View {
                     }
             }
         }
+        // The window carries the classic Viz surface as a translucent tint, and the
+        // sections inside sit a step lighter.
+        .vizGlassSurface(cornerRadius: 0, tint: VizTheme.surfaceTint)
         // The minimum keeps the layout usable on a screen that cannot fit the whole tab;
         // the window is then clamped and this scrolls instead of clipping.
         .frame(minWidth: Self.minimumContentWidth, minHeight: Self.minimumContentHeight)
@@ -198,7 +201,7 @@ struct SettingsSection<Content: View>: View {
             VStack(spacing: 0) {
                 content()
             }
-            .vizGlassSurface(cornerRadius: 14)
+            .vizGlassSurface(cornerRadius: 14, tint: VizTheme.cardTint)
         }
     }
 }
@@ -260,7 +263,7 @@ private struct PostProcessingEditor: View {
                     .foregroundStyle(.secondary)
                     .textSelection(.disabled)
             }
-            .vizGlassSurface(cornerRadius: VizTheme.cornerMedium)
+            .vizGlassSurface(cornerRadius: VizTheme.cornerMedium, tint: VizTheme.cardTint)
             .padding()
         }
     }

@@ -89,7 +89,7 @@ struct PreviewContentView: View {
             }
         }
         .padding(6)
-        .vizGlassSurface(cornerRadius: VizTheme.cornerLarge, tint: VizTheme.accent.opacity(0.12))
+        .vizGlassSurface(cornerRadius: VizTheme.cornerLarge, tint: VizTheme.cardTint)
         .foregroundColor(.primary)
         .material(.sidebar)
     }
@@ -127,7 +127,7 @@ struct ColorPreviewView: View {
             .padding([.horizontal, .bottom])
         }
         .padding(6)
-        .vizGlassSurface(cornerRadius: VizTheme.cornerLarge, tint: VizTheme.accent.opacity(0.12))
+        .vizGlassSurface(cornerRadius: VizTheme.cornerLarge, tint: VizTheme.cardTint)
         .foregroundColor(.primary)
         .material(.sidebar)
     }

@@ -31,10 +31,10 @@ struct AboutView: View {
                     Label("GitHub", systemImage: "paperplane")
                         .padding(5)
                 }
-                .vizGlassButton(prominent: true)
+                .vizGlassButton(prominent: true, tint: VizTheme.link)
             }
             .padding()
-            .vizGlassSurface(cornerRadius: VizTheme.cornerLarge)
+            .vizGlassSurface(cornerRadius: VizTheme.cornerLarge, tint: VizTheme.cardTint)
 
 
             Spacer()
@@ -51,6 +51,7 @@ struct AboutView: View {
         }
 //        .ignoresSafeArea(edges: .top)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .vizGlassSurface(cornerRadius: 0, tint: VizTheme.surfaceTint)
 
     }
 }

@@ -207,8 +207,8 @@ struct WebcamCaptureView: View {
 
                             // Selection overlay
                             Rectangle()
-                                .stroke(VizTheme.accent, lineWidth: 2)
-                                .background(VizTheme.accent.opacity(0.12))
+                                .stroke(VizTheme.link, lineWidth: 2)
+                                .background(VizTheme.link.opacity(0.12))
                                 .frame(width: selectionRect.width, height: selectionRect.height)
                                 .position(x: selectionRect.midX, y: selectionRect.midY)
                                 .opacity(selectionRect != .zero ? 1 : 0)
@@ -462,7 +462,7 @@ struct WebcamCaptureView: View {
                             .fixedSize()
                             .padding(6)
                             .padding(.horizontal, 2)
-                            .vizGlassSurface(cornerRadius: VizTheme.cornerSmall)
+                            .vizGlassSurface(cornerRadius: VizTheme.cornerSmall, tint: VizTheme.cardTint)
                         }
                     }
                     .padding()

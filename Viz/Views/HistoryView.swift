@@ -88,6 +88,7 @@ struct HistoryView: View {
         .padding(.horizontal)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .ignoresSafeArea(.all)
+        .vizGlassSurface(cornerRadius: 0, tint: VizTheme.surfaceTint)
     }
 
     @ViewBuilder
@@ -136,9 +137,9 @@ struct HistoryView: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             .overlay {
                 TrailingRoundedRectangle(cornerRadius: 8)
-                    .stroke(VizTheme.accent.opacity(0.45), lineWidth: 1)
+                    .stroke(VizTheme.link.opacity(0.45), lineWidth: 1)
             }
-            .shadow(color: VizTheme.accent.opacity(0.25), radius: 4, x: 0, y: 1)
+            .shadow(color: VizTheme.link.opacity(0.25), radius: 4, x: 0, y: 1)
     }
 
     private func textRow(_ textItem: TextItem) -> some View {
@@ -173,7 +174,7 @@ struct HistoryView: View {
                     .resizable()
                     .scaledToFit()
                     .frame(width: 14, height: 14)
-                    .foregroundColor(VizTheme.accent)
+                    .foregroundColor(VizTheme.link)
                     .padding(.trailing)
             }
             .buttonStyle(.plain)
@@ -190,7 +191,7 @@ struct HistoryView: View {
                 .resizable()
                 .scaledToFit()
                 .frame(width: 14, height: 14)
-                .foregroundColor(tappedItemID == item.id ? VizTheme.accent : .secondary)
+                .foregroundColor(tappedItemID == item.id ? VizTheme.success : .secondary)
                 .padding(.horizontal, 5)
         }
         .buttonStyle(.borderless)
@@ -210,10 +211,10 @@ private struct HistoryRowSurface: ViewModifier {
 
     func body(content: Content) -> some View {
         content
-            .vizGlassSurface(cornerRadius: VizTheme.cornerSmall)
+            .vizGlassSurface(cornerRadius: VizTheme.cornerSmall, tint: VizTheme.cardTint)
             .overlay {
                 RoundedRectangle(cornerRadius: VizTheme.cornerSmall)
-                    .strokeBorder(isCopied ? VizTheme.accent : Color.secondary.opacity(0.25),
+                    .strokeBorder(isCopied ? VizTheme.success : Color.secondary.opacity(0.25),
                                   lineWidth: isCopied ? 2 : 1)
             }
     }
