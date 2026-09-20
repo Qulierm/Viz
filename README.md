@@ -95,6 +95,14 @@ brew install viz
 
 
 
+## Building from source
+
+Viz can be built either with the original `Viz.xcodeproj` in Xcode, or entirely without Xcode using the Command Line Tools: `bash scripts/build-app.sh` produces a signed `build/Viz.app` and `bash scripts/smoke-test.sh` verifies that it launches.
+
+See [BUILDING.md](BUILDING.md) for the full instructions, the requirements and the limitations of the Xcode-free build.
+
+
+
 ## Some of my apps
 
 [Pearcleaner](https://github.com/alienator88/Pearcleaner) - An opensource app cleaner with privacy in mind
