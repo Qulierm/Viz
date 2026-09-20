@@ -40,6 +40,17 @@ let iconInkThreshold = 60
 /// Minimum accent pixels (hue within 30 degrees of 220, saturated and bright) that a
 /// surface with blue accents must show.
 let accentPixelThreshold = 60
+/// The popover keeps its blue for the title gradient and the update indicator only, so it
+/// gets its own floor: measured 1127 (light) / 1307 (dark), floor at ~3.7x headroom. It is
+/// stricter than the generic floor, so a lost title gradient or update indicator fails.
+let popoverAccentFloor = 300
+/// Maximum share of accent pixels inside the popover's action-button band. The buttons are
+/// neutral glass; anything blue there means the accent has crept back into the main menu.
+let buttonAccentShareLimit = 0.015
+/// The settings tab strip must span at least this share of the surface width...
+let tabStripWidthShareMinimum = 0.45
+/// ...and must show at least this many separated items (four tabs minus tolerance).
+let tabStripMinimumRuns = 3
 /// Maximum share of a render that may still use the removed flat background colour.
 let legacyShareLimit = 0.08
 /// Minimum share of non-backdrop pixels for a render to count as painted.
@@ -586,6 +597,136 @@ func renderSurface(_ surface: AppSurface, scheme: ColorScheme) -> (rep: NSBitmap
     return (rep, outputDirectory.appendingPathComponent(name))
 }
 
+/// Vertical band of the popover that holds the five action buttons: below the header and
+/// above the shortcut pills. The header occupies roughly the first 20 % of the popover and
+/// the pills the last 20 %, so the middle 60 % is the button row.
+func buttonBand(_ rep: NSBitmapImageRep) -> ClosedRange<Int> {
+    let top = Int(Double(rep.pixelsHigh) * 0.25)
+    let bottom = Int(Double(rep.pixelsHigh) * 0.78)
+    return top...max(top, min(bottom, rep.pixelsHigh - 1))
+}
+
+/// True for pixels with any visible blue cast: hue within 30 degrees of 220 with a
+/// saturation above 0.12 and a brightness above 0.2. The neutral surfaces (grey glass, the
+/// window backdrop, neutral symbols) sit at a saturation below 0.05 in both appearances,
+/// while an accent tint lands at 0.14 (light) to 0.44 (dark), so this catches a tinted
+/// button surface that the stricter accent predicate would miss.
+func isBlueTintPixel(_ color: NSColor) -> Bool {
+    var hue: CGFloat = 0
+    var saturation: CGFloat = 0
+    var brightness: CGFloat = 0
+    var alpha: CGFloat = 0
+    color.getHue(&hue, saturation: &saturation, brightness: &brightness, alpha: &alpha)
+    let degrees = hue * 360
+    let delta = abs(degrees - 220)
+    return min(delta, 360 - delta) <= 30 && saturation > 0.12 && brightness > 0.2 && alpha > 0.2
+}
+
+/// Share of blue-tinted pixels inside a band of the render, plus the band's pixel count.
+func accentShare(_ rep: NSBitmapImageRep, xRange: ClosedRange<Int>, yRange: ClosedRange<Int>) -> (share: Double, pixels: Int, accent: Int) {
+    var pixels = 0
+    var accent = 0
+    for y in yRange {
+        for x in xRange {
+            guard let color = rep.colorAt(x: x, y: y)?.usingColorSpace(.deviceRGB) else { continue }
+            pixels += 1
+            if isBlueTintPixel(color) {
+                accent += 1
+            }
+        }
+    }
+    guard pixels > 0 else { return (0, 0, 0) }
+    return (Double(accent) / Double(pixels), pixels, accent)
+}
+
+/// Measures the settings tab strip: how much of the surface width its ink spans and how
+/// many separated items it contains. The strip is located as the topmost ink region - the
+/// rows from the first ink down to the first sizeable gap - so the content below it cannot
+/// widen the measurement. A collapsed tab bar produced a narrow blob in the middle of the
+/// strip, which fails both numbers.
+func tabStripMetrics(_ rep: NSBitmapImageRep, backdrop: NSColor, rowGap: Int = 24, itemGap: Int = 10) -> (widthShare: Double, runs: Int, ink: Int, rows: ClosedRange<Int>?) {
+    let base = backdrop.usingColorSpace(.deviceRGB) ?? .black
+
+    func rowInk(_ y: Int) -> Int {
+        var count = 0
+        for x in 0..<rep.pixelsWide {
+            guard let color = rep.colorAt(x: x, y: y)?.usingColorSpace(.deviceRGB) else { continue }
+            let alpha = color.alphaComponent
+            let red = color.redComponent * alpha + base.redComponent * (1 - alpha)
+            let green = color.greenComponent * alpha + base.greenComponent * (1 - alpha)
+            let blue = color.blueComponent * alpha + base.blueComponent * (1 - alpha)
+            let contrast = abs(red - base.redComponent) + abs(green - base.greenComponent) + abs(blue - base.blueComponent)
+            if contrast > inkContrastThreshold {
+                count += 1
+            }
+        }
+        return count
+    }
+
+    // Topmost ink region: start at the first row with ink, stop at the first gap longer
+    // than `rowGap` rows.
+    var stripTop: Int?
+    var stripBottom: Int?
+    var emptyRun = 0
+    for y in 0..<rep.pixelsHigh {
+        if rowInk(y) > 0 {
+            if stripTop == nil { stripTop = y }
+            stripBottom = y
+            emptyRun = 0
+        } else if stripTop != nil {
+            emptyRun += 1
+            if emptyRun > rowGap { break }
+        }
+    }
+
+    guard let top = stripTop, let bottom = stripBottom else {
+        return (0, 0, 0, nil)
+    }
+
+    var columns = [Bool](repeating: false, count: rep.pixelsWide)
+    var ink = 0
+    for y in top...bottom {
+        for x in 0..<rep.pixelsWide {
+            guard let color = rep.colorAt(x: x, y: y)?.usingColorSpace(.deviceRGB) else { continue }
+            let alpha = color.alphaComponent
+            let red = color.redComponent * alpha + base.redComponent * (1 - alpha)
+            let green = color.greenComponent * alpha + base.greenComponent * (1 - alpha)
+            let blue = color.blueComponent * alpha + base.blueComponent * (1 - alpha)
+            let contrast = abs(red - base.redComponent) + abs(green - base.greenComponent) + abs(blue - base.blueComponent)
+            if contrast > inkContrastThreshold {
+                columns[x] = true
+                ink += 1
+            }
+        }
+    }
+
+    let first = columns.firstIndex(of: true)
+    let last = columns.lastIndex(of: true)
+    let widthShare: Double
+    if let first, let last {
+        widthShare = Double(last - first + 1) / Double(rep.pixelsWide)
+    } else {
+        widthShare = 0
+    }
+
+    var runs = 0
+    var index = 0
+    while index < columns.count {
+        if columns[index] {
+            runs += 1
+            var empty = 0
+            while index < columns.count && empty < itemGap {
+                if columns[index] { empty = 0 } else { empty += 1 }
+                index += 1
+            }
+        } else {
+            index += 1
+        }
+    }
+
+    return (widthShare, runs, ink, top...bottom)
+}
+
 func checkDesign() -> (passed: Bool, details: String) {
     var failures: [String] = []
     var summaries: [String] = []
@@ -620,11 +761,35 @@ func checkDesign() -> (passed: Bool, details: String) {
             if metrics.contentShare < contentShareMinimum {
                 failures.append("\(label):blank(\(String(format: "%.1f%%", metrics.contentShare * 100)))")
             }
-            if surface.requiresAccent && metrics.accentPixels < accentPixelThreshold {
-                failures.append("\(label):accent(\(metrics.accentPixels))")
+            if surface.requiresAccent {
+                let floor = surface == .popover ? popoverAccentFloor : accentPixelThreshold
+                if metrics.accentPixels < floor {
+                    failures.append("\(label):accent(\(metrics.accentPixels))")
+                }
             }
             if metrics.legacyShare > legacyShareLimit {
                 failures.append("\(label):legacy(\(String(format: "%.1f%%", metrics.legacyShare * 100)))")
+            }
+
+            // The popover action buttons must stay neutral: the accent belongs to the title
+            // gradient, the update indicator and the system-tinted controls only.
+            if surface == .popover {
+                let band = buttonBand(rendered.rep)
+                let measured = accentShare(rendered.rep, xRange: 0...(rendered.rep.pixelsWide - 1), yRange: band)
+                summaries[summaries.count - 1] += String(format: " buttons=%.2f%%", measured.share * 100)
+                if measured.share > buttonAccentShareLimit {
+                    failures.append("\(label):buttons accent=\(String(format: "%.1f%%", measured.share * 100)) (limit \(String(format: "%.1f%%", buttonAccentShareLimit * 100)))")
+                }
+            }
+
+            // The settings window must show a real tab strip across the top, not the narrow
+            // blob a collapsed stock tab bar produced.
+            if surface == .settings {
+                let strip = tabStripMetrics(rendered.rep, backdrop: Backdrop.forScheme(scheme))
+                summaries[summaries.count - 1] += String(format: " tabstrip=%.0f%%/%druns", strip.widthShare * 100, strip.runs)
+                if strip.widthShare < tabStripWidthShareMinimum || strip.runs < tabStripMinimumRuns {
+                    failures.append("\(label):tabstrip width=\(String(format: "%.0f%%", strip.widthShare * 100)) runs=\(strip.runs) (need \(String(format: "%.0f%%", tabStripWidthShareMinimum * 100)) and \(tabStripMinimumRuns))")
+                }
             }
 
             if debugMode {
