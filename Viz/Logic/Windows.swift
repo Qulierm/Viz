@@ -18,16 +18,22 @@ func openAbout() {
 }
 
 func openAppSettings(selectedTab: Int = 0) {
-    if #available(macOS 14.0, *) {
-        // For macOS 14+, we need to use a different approach since we can't directly control tab selection with openSettings
-        // We'll store the selected tab and let SettingsView read it
-        UserDefaults.standard.set(selectedTab, forKey: "settingsSelectedTab")
-        @Environment(\.openSettings) var openSettings
-        openSettings()
-    } else {
-        UserDefaults.standard.set(selectedTab, forKey: "settingsSelectedTab")
-        NSApp.sendAction(Selector(("showSettingsWindow:")), to: nil, from: nil)
-    }
+    // SwiftUI's `openSettings` environment action only exists inside a View, so calling it
+    // from here silently did nothing on macOS 27 (the click just stored the tab and
+    // stopped). The settings therefore open in a regular window through WindowManager,
+    // exactly like the History and About windows.
+    UserDefaults.standard.set(selectedTab, forKey: "settingsSelectedTab")
+    WindowManager.shared.open(
+        id: "settings",
+        with: SettingsView()
+            .environmentObject(AppState.shared)
+            .environmentObject(HistoryState.shared)
+            .environmentObject(AppServices.shared.updater),
+        width: 520,
+        height: 460,
+        material: .sidebar
+    )
+    NSApp.activate(ignoringOtherApps: true)
 }
 
 private var webcamWindow: NSWindow?

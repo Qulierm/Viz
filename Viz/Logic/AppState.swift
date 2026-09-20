@@ -11,6 +11,13 @@ import SwiftUI
 import AlinFoundation
 import Vision
 
+/// Single shared updater: the menu bar scene and the settings window must observe the same instance.
+final class AppServices {
+    static let shared = AppServices()
+    let updater = Updater(owner: "alienator88", repo: "Viz")
+    private init() {}
+}
+
 class RecognizedContent: ObservableObject {
     static let shared = RecognizedContent()
     @Published var items = [TextItem]()

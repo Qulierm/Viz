@@ -13,7 +13,7 @@ import AlinFoundation
 struct VizApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
     @ObservedObject var appState = AppState.shared
-    @StateObject private var updater = Updater(owner: "alienator88", repo: "Viz")
+    @StateObject private var updater = AppServices.shared.updater
 
     var body: some Scene {
         MenuBarExtra("Viz", systemImage: updater.updateAvailable ? "arrow.down.circle" : "eye", content: {
