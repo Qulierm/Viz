@@ -46,107 +46,8 @@ struct HistoryView: View {
                     LazyVStack(alignment: .leading) {
                         ForEach(filteredItems) { item in
                             HStack {
-                                switch item {
-                                case .color(let colorItem):
-                                    HStack(alignment: .center, spacing: 0) {
-                                        VStack(alignment: .leading) {
-                                            Text("HEX: \(colorItem.hex)")
-                                            Text("RGB: \(colorItem.rgb)")
-                                                .font(.footnote)
-                                                .foregroundStyle(.secondary)
-                                                .onTapGesture {
-                                                    tappedItemID = colorItem.id
-                                                    copyToClipboard(colorItem.rgb)
-                                                    DispatchQueue.main.asyncAfter(deadline: .now() + 1) {
-                                                        tappedItemID = nil
-                                                    }
-                                                }
-                                        }
-                                        .frame(width: 100)
-                                        .padding()
-                                        TrailingRoundedRectangle(cornerRadius: 8)
-                                            .fill(colorItem.color)
-                                            .frame(maxWidth: .infinity, alignment: .leading)
-                                    }
-                                    .background {
-                                        RoundedRectangle(cornerRadius: 8)
-                                            .fill(.secondary.opacity(0.1))
-                                    }
-                                    .overlay {
-                                        RoundedRectangle(cornerRadius: 8)
-                                            .strokeBorder(.secondary.opacity(0.3))
-                                    }
-                                    .animation(.easeInOut(duration: 0.2), value: tappedItemID)
-                                    .onTapGesture {
-                                        tappedItemID = colorItem.id
-                                        copyToClipboard(colorItem.hex)
-                                        DispatchQueue.main.asyncAfter(deadline: .now() + 1) {
-                                            tappedItemID = nil
-                                        }
-                                    }
-                                case .text(let textItem):
-                                    HStack {
-                                        HStack(alignment: .center, spacing: 0) {
-                                            let trimmed = textItem.text.trimmingCharacters(in: .whitespacesAndNewlines)
-                                            if isRecognizedURLFormat(trimmed),
-                                               let url = URL(string: trimmed.hasPrefix("http") ? trimmed : "https://\(trimmed)") {
-                                                Button {
-                                                    NSWorkspace.shared.open(url)
-                                                } label: {
-                                                    Image(systemName: "safari")
-                                                        .resizable()
-                                                        .scaledToFit()
-                                                        .frame(width: 14, height: 14)
-                                                        .foregroundColor(.blue)
-                                                        .padding(.trailing)
-                                                }
-                                                .buttonStyle(.plain)
-                                            }
-                                            Text(textItem.text)
-                                        }
-                                        .frame(maxWidth: .infinity, alignment: .leading)
-                                        .padding()
-                                        .background {
-                                            RoundedRectangle(cornerRadius: 8)
-                                                .fill(.secondary.opacity(0.1))
-                                        }
-                                        .overlay {
-                                            RoundedRectangle(cornerRadius: 8)
-                                                .strokeBorder(.secondary.opacity(0.3))
-                                        }
-                                        .animation(.easeInOut(duration: 0.2), value: tappedItemID)
-                                        .onTapGesture {
-                                            tappedItemID = textItem.id
-                                            copyToClipboard(textItem.text)
-                                            DispatchQueue.main.asyncAfter(deadline: .now() + 1) {
-                                                tappedItemID = nil
-                                            }
-                                        }
-                                    }
-                                }
-
-
-                                // Delete item button
-                                Button(action: {
-                                    switch item {
-                                    case .text(let textItem):
-                                        if tappedItemID != textItem.id {
-                                            historyState.historyItems.removeAll { $0.id == item.id }
-                                        }
-                                    case .color(let colorItem):
-                                        if tappedItemID != colorItem.id {
-                                            historyState.historyItems.removeAll { $0.id == item.id }
-                                        }
-                                    }
-                                }) {
-                                    Image(systemName: tappedItemID == item.id ? "checkmark" : "xmark.circle.fill")
-                                        .resizable()
-                                        .scaledToFit()
-                                        .frame(width: 14, height: 14)
-                                        .foregroundColor(tappedItemID == item.id ? .green : .secondary)
-                                        .padding(.horizontal, 5)
-                                }
-                                .buttonStyle(.borderless)
+                                row(for: item)
+                                deleteButton(for: item)
                             }
                         }
                     }
@@ -178,8 +79,7 @@ struct HistoryView: View {
                         .padding(5)
                         .padding(.leading, 1)
                 }
-                .buttonStyle(.borderedProminent)
-                .tint(.red)
+                .vizGlassButton(prominent: true, tint: .red)
             }
             .padding(.vertical)
 
@@ -188,7 +88,112 @@ struct HistoryView: View {
         .padding(.horizontal)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .ignoresSafeArea(.all)
+    }
 
+    @ViewBuilder
+    private func row(for item: HistoryEntry) -> some View {
+        switch item {
+        case .color(let colorItem):
+            colorRow(colorItem)
+        case .text(let textItem):
+            textRow(textItem)
+        }
+    }
+
+    private func colorRow(_ colorItem: ColorItem) -> some View {
+        HStack(alignment: .center, spacing: 0) {
+            VStack(alignment: .leading) {
+                Text("HEX: \(colorItem.hex)")
+                Text("RGB: \(colorItem.rgb)")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                    .onTapGesture {
+                        tappedItemID = colorItem.id
+                        copyToClipboard(colorItem.rgb)
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 1) {
+                            tappedItemID = nil
+                        }
+                    }
+            }
+            .frame(width: 100)
+            .padding()
+            swatch(for: colorItem)
+        }
+        .modifier(HistoryRowSurface(isCopied: tappedItemID == colorItem.id))
+        .animation(.easeInOut(duration: 0.2), value: tappedItemID)
+        .onTapGesture {
+            tappedItemID = colorItem.id
+            copyToClipboard(colorItem.hex)
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1) {
+                tappedItemID = nil
+            }
+        }
+    }
+
+    private func swatch(for colorItem: ColorItem) -> some View {
+        TrailingRoundedRectangle(cornerRadius: 8)
+            .fill(colorItem.color)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .overlay {
+                TrailingRoundedRectangle(cornerRadius: 8)
+                    .stroke(VizTheme.accent.opacity(0.45), lineWidth: 1)
+            }
+            .shadow(color: VizTheme.accent.opacity(0.25), radius: 4, x: 0, y: 1)
+    }
+
+    private func textRow(_ textItem: TextItem) -> some View {
+        HStack {
+            HStack(alignment: .center, spacing: 0) {
+                urlButton(for: textItem)
+                Text(textItem.text)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding()
+            .modifier(HistoryRowSurface(isCopied: tappedItemID == textItem.id))
+            .animation(.easeInOut(duration: 0.2), value: tappedItemID)
+            .onTapGesture {
+                tappedItemID = textItem.id
+                copyToClipboard(textItem.text)
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1) {
+                    tappedItemID = nil
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func urlButton(for textItem: TextItem) -> some View {
+        let trimmed = textItem.text.trimmingCharacters(in: .whitespacesAndNewlines)
+        if isRecognizedURLFormat(trimmed),
+           let url = URL(string: trimmed.hasPrefix("http") ? trimmed : "https://\(trimmed)") {
+            Button {
+                NSWorkspace.shared.open(url)
+            } label: {
+                Image(systemName: "safari")
+                    .resizable()
+                    .scaledToFit()
+                    .frame(width: 14, height: 14)
+                    .foregroundColor(VizTheme.accent)
+                    .padding(.trailing)
+            }
+            .buttonStyle(.plain)
+        }
+    }
+
+    private func deleteButton(for item: HistoryEntry) -> some View {
+        Button(action: {
+            if tappedItemID != item.id {
+                historyState.historyItems.removeAll { $0.id == item.id }
+            }
+        }) {
+            Image(systemName: tappedItemID == item.id ? "checkmark" : "xmark.circle.fill")
+                .resizable()
+                .scaledToFit()
+                .frame(width: 14, height: 14)
+                .foregroundColor(tappedItemID == item.id ? VizTheme.accent : .secondary)
+                .padding(.horizontal, 5)
+        }
+        .buttonStyle(.borderless)
     }
 }
 
@@ -196,4 +201,20 @@ struct HistoryView: View {
 func isRecognizedURLFormat(_ text: String) -> Bool {
     let pattern = #"^(https?:\/\/)?(www\.)?[a-zA-Z0-9\-]+\.[a-zA-Z]{2,}.*$"#
     return text.range(of: pattern, options: .regularExpression) != nil
+}
+
+/// Row surface shared by the text and colour entries: a glass panel that shows an
+/// accent-tinted ring while the row reports its copied feedback.
+private struct HistoryRowSurface: ViewModifier {
+    let isCopied: Bool
+
+    func body(content: Content) -> some View {
+        content
+            .vizGlassSurface(cornerRadius: VizTheme.cornerSmall)
+            .overlay {
+                RoundedRectangle(cornerRadius: VizTheme.cornerSmall)
+                    .strokeBorder(isCopied ? VizTheme.accent : Color.secondary.opacity(0.25),
+                                  lineWidth: isCopied ? 2 : 1)
+            }
+    }
 }

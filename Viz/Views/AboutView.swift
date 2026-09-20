@@ -15,23 +15,26 @@ struct AboutView: View {
                 .bold()
                 .foregroundStyle(
                     LinearGradient(
-                        colors: [.red, .purple, .blue],
+                        colors: [VizTheme.accent, VizTheme.accentBright],
                         startPoint: .leading,
                         endPoint: .trailing
                     )
                 )
 
-            Text("Version \(Bundle.main.version) (Build \(Bundle.main.buildVersion))")
-                .padding(.vertical, 4)
+            VStack(spacing: 0) {
+                Text("Version \(Bundle.main.version) (Build \(Bundle.main.buildVersion))")
+                    .padding(.vertical, 4)
 
-            Button {
-                NSWorkspace.shared.open(URL(string: "https://github.com/alienator88/Viz")!)
-            } label: {
-                Label("GitHub", systemImage: "paperplane")
-                    .padding(5)
+                Button {
+                    NSWorkspace.shared.open(URL(string: "https://github.com/alienator88/Viz")!)
+                } label: {
+                    Label("GitHub", systemImage: "paperplane")
+                        .padding(5)
+                }
+                .vizGlassButton(prominent: true)
             }
-            .buttonStyle(.borderedProminent)
-            .tint(.blue)
+            .padding()
+            .vizGlassSurface(cornerRadius: VizTheme.cornerLarge)
 
 
             Spacer()
