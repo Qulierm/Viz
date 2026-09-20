@@ -71,7 +71,13 @@ extension View {
                 }
             }
         } else {
-            self.background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: cornerRadius))
+            // The fallback has to apply the tint too, otherwise the restored palette would
+            // only show on macOS 26+ and the material path would render neutral grey.
+            self
+                // The tint sits directly behind the content and the material behind it, so
+                // the surface keeps the material's translucency and the restored hue.
+                .background(tint ?? .clear, in: RoundedRectangle(cornerRadius: cornerRadius))
+                .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: cornerRadius))
         }
     }
 

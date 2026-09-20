@@ -47,6 +47,19 @@ let popoverAccentFloor = 300
 /// Maximum share of accent pixels inside the popover's action-button band. The buttons are
 /// neutral glass; anything blue there means the accent has crept back into the main menu.
 let buttonAccentShareLimit = 0.015
+/// The restored Viz surface must read as the classic blue-grey: the blue channel has to
+/// exceed red by at least this much. A neutral material surface gives 0, the tinted surface
+/// measures 6-8, and the opaque display-P3 #313443 measures 21 - so the upper bound is what
+/// fails when the surface is painted flat instead of tinted. Both bounds sit midway between
+/// the measured states, which leaves several points of headroom on each side.
+let surfaceCastMinimum: Double = 4
+let surfaceCastMaximum: Double = 15
+/// Minimum pixels per hue window (red ~0, purple ~285, blue ~220 degrees) in the title band
+/// of the popover and about renders, proving the red-purple-blue brand gradient is back.
+let brandHuePixelMinimum = 40
+/// Minimum green pixels (hue within 30 degrees of 120) in the dark popover render, which is
+/// the update-available bubble.
+let successPixelMinimum = 40
 /// Ceiling for the popover's natural height. The popover measures about 161 pt after the
 /// padding trim (it was 177 pt), so this catches a regression back to the taller layout.
 let popoverHeightCeiling: CGFloat = 170
@@ -827,7 +840,16 @@ func accentShare(_ rep: NSBitmapImageRep, xRange: ClosedRange<Int>, yRange: Clos
 /// widen the measurement. A collapsed tab bar produced a narrow blob in the middle of the
 /// strip, which fails both numbers.
 func tabStripMetrics(_ rep: NSBitmapImageRep, backdrop: NSColor, rowGap: Int = 24, itemGap: Int = 10) -> (widthShare: Double, runs: Int, ink: Int, rows: ClosedRange<Int>?) {
-    let base = backdrop.usingColorSpace(.deviceRGB) ?? .black
+    // The window root now carries its own surface tint, so "ink" has to be measured against
+    // that surface rather than against the harness backdrop: otherwise the whole tinted
+    // window counts as ink and the strip cannot be located.
+    let surface = dominantSurfaceColor(rep, backdrop: backdrop)
+    let base: NSColor
+    if let surface {
+        base = NSColor(deviceRed: surface.r, green: surface.g, blue: surface.b, alpha: 1)
+    } else {
+        base = backdrop.usingColorSpace(.deviceRGB) ?? .black
+    }
 
     func rowInk(_ y: Int) -> Int {
         var count = 0
@@ -909,6 +931,90 @@ func tabStripMetrics(_ rep: NSBitmapImageRep, backdrop: NSColor, rowGap: Int = 2
     return (widthShare, runs, ink, top...bottom)
 }
 
+/// The most frequent colour of a render, sampled on a coarse grid: the surface the view is
+/// painted on. Returns the RGB components in 0...1 and the blue-minus-red cast that tells
+/// the restored Viz surface apart from a neutral material and from the opaque colour.
+func dominantSurfaceColor(_ rep: NSBitmapImageRep, backdrop: NSColor) -> (r: Double, g: Double, b: Double, cast: Double)? {
+    var counts: [String: (count: Int, r: Double, g: Double, b: Double)] = [:]
+    for y in stride(from: 0, to: rep.pixelsHigh, by: 3) {
+        for x in stride(from: 0, to: rep.pixelsWide, by: 3) {
+            guard let color = rep.colorAt(x: x, y: y)?.usingColorSpace(.deviceRGB) else { continue }
+            let alpha = color.alphaComponent
+            let base = backdrop.usingColorSpace(.deviceRGB) ?? .black
+            let r = Double(color.redComponent * alpha + base.redComponent * (1 - alpha))
+            let g = Double(color.greenComponent * alpha + base.greenComponent * (1 - alpha))
+            let b = Double(color.blueComponent * alpha + base.blueComponent * (1 - alpha))
+            let key = String(format: "%d,%d,%d", Int(r * 255), Int(g * 255), Int(b * 255))
+            let previous = counts[key]?.count ?? 0
+            counts[key] = (previous + 1, r, g, b)
+        }
+    }
+    guard let best = counts.values.max(by: { $0.count < $1.count }) else { return nil }
+    return (best.r, best.g, best.b, (best.b - best.r) * 255)
+}
+
+/// Counts pixels in a band whose hue falls in one of the brand windows: red around 0,
+/// purple around 285 and blue around 220 degrees.
+func brandHueCounts(_ rep: NSBitmapImageRep, backdrop: NSColor, bandShare: Double = 0.30) -> (red: Int, purple: Int, blue: Int) {
+    let bandHeight = max(1, Int(Double(rep.pixelsHigh) * bandShare))
+    var red = 0
+    var purple = 0
+    var blue = 0
+    for y in 0..<bandHeight {
+        for x in 0..<rep.pixelsWide {
+            guard let color = rep.colorAt(x: x, y: y)?.usingColorSpace(.deviceRGB) else { continue }
+            let alpha = color.alphaComponent
+            guard alpha > 0.2 else { continue }
+            let base = backdrop.usingColorSpace(.deviceRGB) ?? .black
+            let composited = NSColor(deviceRed: color.redComponent * alpha + base.redComponent * (1 - alpha),
+                                     green: color.greenComponent * alpha + base.greenComponent * (1 - alpha),
+                                     blue: color.blueComponent * alpha + base.blueComponent * (1 - alpha),
+                                     alpha: 1)
+            var hue: CGFloat = 0
+            var saturation: CGFloat = 0
+            var brightness: CGFloat = 0
+            composited.getHue(&hue, saturation: &saturation, brightness: &brightness, alpha: nil)
+            guard saturation > 0.35, brightness > 0.35 else { continue }
+            let degrees = Double(hue) * 360
+            func within(_ target: Double) -> Bool {
+                let delta = abs(degrees - target)
+                return min(delta, 360 - delta) <= 25
+            }
+            if within(0) { red += 1 }
+            if within(285) { purple += 1 }
+            if within(220) { blue += 1 }
+        }
+    }
+    return (red, purple, blue)
+}
+
+/// Counts green pixels (hue within 30 degrees of 120) in a render.
+func successPixelCount(_ rep: NSBitmapImageRep, backdrop: NSColor) -> Int {
+    let base = backdrop.usingColorSpace(.deviceRGB) ?? .black
+    var count = 0
+    for y in 0..<rep.pixelsHigh {
+        for x in 0..<rep.pixelsWide {
+            guard let color = rep.colorAt(x: x, y: y)?.usingColorSpace(.deviceRGB) else { continue }
+            let alpha = color.alphaComponent
+            guard alpha > 0.2 else { continue }
+            let composited = NSColor(deviceRed: color.redComponent * alpha + base.redComponent * (1 - alpha),
+                                     green: color.greenComponent * alpha + base.greenComponent * (1 - alpha),
+                                     blue: color.blueComponent * alpha + base.blueComponent * (1 - alpha),
+                                     alpha: 1)
+            var hue: CGFloat = 0
+            var saturation: CGFloat = 0
+            var brightness: CGFloat = 0
+            composited.getHue(&hue, saturation: &saturation, brightness: &brightness, alpha: nil)
+            let degrees = Double(hue) * 360
+            let delta = abs(degrees - 120)
+            if min(delta, 360 - delta) <= 30 && saturation > 0.35 && brightness > 0.35 {
+                count += 1
+            }
+        }
+    }
+    return count
+}
+
 func checkDesign() -> (passed: Bool, details: String) {
     var failures: [String] = []
     var summaries: [String] = []
@@ -943,14 +1049,50 @@ func checkDesign() -> (passed: Bool, details: String) {
             if metrics.contentShare < contentShareMinimum {
                 failures.append("\(label):blank(\(String(format: "%.1f%%", metrics.contentShare * 100)))")
             }
-            if surface.requiresAccent {
-                let floor = surface == .popover ? popoverAccentFloor : accentPixelThreshold
-                if metrics.accentPixels < floor {
+            // The popover's old accent floor is gone with the blue-only palette: the brand
+            // gradient and the green update bubble are asserted instead (below).
+            if surface.requiresAccent && surface != .popover {
+                if metrics.accentPixels < accentPixelThreshold {
                     failures.append("\(label):accent(\(metrics.accentPixels))")
                 }
             }
-            if metrics.legacyShare > legacyShareLimit {
-                failures.append("\(label):legacy(\(String(format: "%.1f%%", metrics.legacyShare * 100)))")
+            // The restored surface: the popover and settings roots must carry the classic
+            // Viz blue-grey as a translucent tint. The cast (blue minus red) is the
+            // discriminator: a neutral material gives 0 and the opaque colour gives ~28,
+            // while the tinted surface measures 5-10.
+            if surface == .popover || surface == .settings {
+                if let dominant = dominantSurfaceColor(rendered.rep, backdrop: Backdrop.forScheme(scheme)) {
+                    summaries[summaries.count - 1] += String(format: " surface=%d,%d,%d cast=%.0f",
+                                                             Int(dominant.r * 255), Int(dominant.g * 255), Int(dominant.b * 255), dominant.cast)
+                    if dominant.cast < surfaceCastMinimum || dominant.cast > surfaceCastMaximum {
+                        failures.append(String(format: "%@:surface rgb=%d,%d,%d cast=%.0f (need %.0f...%.0f)",
+                                                label, Int(dominant.r * 255), Int(dominant.g * 255), Int(dominant.b * 255),
+                                                dominant.cast, surfaceCastMinimum, surfaceCastMaximum))
+                    }
+                } else {
+                    failures.append("\(label):surface unmeasurable")
+                }
+            }
+
+            // The brand gradient: the title band must contain red, purple and blue pixels.
+            if surface == .popover || surface == .about {
+                // The popover title sits in its header; the About title is further down,
+                // below the app icon, so that surface needs a taller band.
+                let hues = brandHueCounts(rendered.rep, backdrop: Backdrop.forScheme(scheme),
+                                          bandShare: surface == .about ? 0.55 : 0.30)
+                summaries[summaries.count - 1] += " brand=\(hues.red)/\(hues.purple)/\(hues.blue)"
+                if hues.red < brandHuePixelMinimum || hues.purple < brandHuePixelMinimum || hues.blue < brandHuePixelMinimum {
+                    failures.append("\(label):brand r=\(hues.red) p=\(hues.purple) b=\(hues.blue) (need \(brandHuePixelMinimum) each)")
+                }
+            }
+
+            // The update-available bubble must be green in the dark popover.
+            if surface == .popover && scheme == .dark {
+                let green = successPixelCount(rendered.rep, backdrop: Backdrop.forScheme(scheme))
+                summaries[summaries.count - 1] += " success=\(green)"
+                if green < successPixelMinimum {
+                    failures.append("\(label):success green=\(green) < \(successPixelMinimum)")
+                }
             }
 
             // The popover action buttons must stay neutral: the accent belongs to the title

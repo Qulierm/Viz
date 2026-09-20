@@ -15,7 +15,7 @@ struct AboutView: View {
                 .bold()
                 .foregroundStyle(
                     LinearGradient(
-                        colors: [VizTheme.accent, VizTheme.accentBright],
+                        colors: [.red, .purple, .blue],
                         startPoint: .leading,
                         endPoint: .trailing
                     )
