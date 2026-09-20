@@ -29,9 +29,12 @@ func openAppSettings(selectedTab: Int = 0) {
             .environmentObject(AppState.shared)
             .environmentObject(HistoryState.shared)
             .environmentObject(AppServices.shared.updater),
-        width: 560,
-        height: 520,
-        material: .sidebar
+        // The width fits the widest tab (Updates needs about 686 pt) and the view resizes
+        // the window to the selected tab's content once it is laid out.
+        width: SettingsView.windowWidth,
+        height: SettingsView.minimumContentHeight + 100,
+        material: .sidebar,
+        center: true
     )
     NSApp.activate(ignoringOtherApps: true)
 }

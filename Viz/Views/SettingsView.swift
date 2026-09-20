@@ -25,6 +25,19 @@ struct SettingsView: View {
     @EnvironmentObject var appState: AppState
     @AppStorage("settingsSelectedTab") private var selectedTab: Int = 0
 
+    /// Width that fits the widest tab (the Updates tab needs about 686 pt).
+    static let windowWidth: CGFloat = 690
+    /// Floor for the window content, used when the screen cannot fit a whole tab.
+    static let minimumContentHeight: CGFloat = 420
+    static let minimumContentWidth: CGFloat = 560
+    /// Height of the tab strip (12 pt top + item + 8 pt bottom) and of its divider.
+    static let tabStripHeight: CGFloat = 69
+    static let dividerHeight: CGFloat = 1
+    static let contentPadding: CGFloat = 20
+
+    @State private var window: NSWindow?
+    @State private var contentHeight: CGFloat = 0
+
     var body: some View {
         VStack(spacing: 0) {
             tabStrip
@@ -32,14 +45,61 @@ struct SettingsView: View {
                 .opacity(0.4)
             ScrollView {
                 tabContent
-                    .padding(20)
+                    .padding(Self.contentPadding)
                     .frame(maxWidth: .infinity, alignment: .leading)
+                    .background {
+                        GeometryReader { proxy in
+                            Color.clear.preference(key: SettingsContentHeightKey.self, value: proxy.size.height)
+                        }
+                    }
             }
         }
-        // The minimum keeps the window at the size `openAppSettings` asks for: without it
-        // AppKit shrinks the window to the content's fitting size and the tab strip and
-        // rows end up cramped, which is the layout problem this rebuild fixes.
-        .frame(minWidth: 560, minHeight: 520)
+        // The minimum keeps the layout usable on a screen that cannot fit the whole tab;
+        // the window is then clamped and this scrolls instead of clipping.
+        .frame(minWidth: Self.minimumContentWidth, minHeight: Self.minimumContentHeight)
+        .background(SettingsWindowAccessor { window in
+            window?.title = "Viz Settings"
+            window?.titleVisibility = .visible
+            self.window = window
+        })
+        .onPreferenceChange(SettingsContentHeightKey.self) { height in
+            contentHeight = height
+            fitWindowToContent()
+        }
+        .onChange(of: selectedTab) { _ in
+            fitWindowToContent()
+        }
+    }
+
+    /// Sizes the window to the selected tab: as wide as the widest tab needs, as tall as
+    /// the current tab's content, clamped so it can never leave the screen. The top-left
+    /// corner is kept so switching tabs does not make the window jump.
+    private func fitWindowToContent() {
+        guard let window else { return }
+        DispatchQueue.main.async {
+            guard let screen = window.screen ?? NSScreen.main else { return }
+            let visible = screen.visibleFrame
+            // The title bar sits outside the content area, so it is added on top of the
+            // height the content asks for.
+            let chrome = max(0, window.frame.height - window.contentLayoutRect.height)
+            // The hosting view reports exactly how much room the current tab needs (it
+            // includes the title-bar safe area). The measured content height is the
+            // fallback for the case where the view tree is not available.
+            let requiredContent = Self.hostingView(in: window.contentView)?.fittingSize.height
+                ?? (Self.tabStripHeight + Self.dividerHeight + contentHeight)
+            let maxContent = max(Self.minimumContentHeight, visible.height - 100)
+            let contentHeight = min(max(requiredContent, Self.minimumContentHeight), maxContent)
+            let height = contentHeight + chrome
+
+            let oldFrame = window.frame
+            var frame = NSRect(x: oldFrame.minX, y: oldFrame.maxY - height, width: Self.windowWidth, height: height)
+            frame.origin.x = min(max(frame.origin.x, visible.minX), max(visible.minX, visible.maxX - frame.width))
+            frame.origin.y = min(max(frame.origin.y, visible.minY), max(visible.minY, visible.maxY - frame.height))
+
+            if abs(frame.height - oldFrame.height) > 0.5 || abs(frame.width - oldFrame.width) > 0.5 || frame.origin != oldFrame.origin {
+                window.setFrame(frame, display: true, animate: false)
+            }
+        }
     }
 
     /// The tab strip is drawn explicitly instead of using the stock tab bar: inside a
@@ -408,5 +468,47 @@ struct UpdaterSettingsView: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+
+extension SettingsView {
+    /// Finds the SwiftUI hosting view in the window's view tree; its `fittingSize` is the
+    /// size the current tab actually needs.
+    static func hostingView(in view: NSView?) -> NSView? {
+        guard let view else { return nil }
+        if String(describing: type(of: view)).contains("NSHostingView") {
+            return view
+        }
+        for subview in view.subviews {
+            if let found = hostingView(in: subview) {
+                return found
+            }
+        }
+        return nil
+    }
+}
+
+/// Reports the height of the settings content so the window can be sized to it.
+struct SettingsContentHeightKey: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = max(value, nextValue())
+    }
+}
+
+/// Captures the window that hosts the settings so the view can size it to its content.
+/// `WindowManager` creates the window, so the size cannot be set at creation time.
+struct SettingsWindowAccessor: NSViewRepresentable {
+    let onWindow: (NSWindow?) -> Void
+
+    func makeNSView(context: Context) -> NSView {
+        let view = NSView()
+        DispatchQueue.main.async { onWindow(view.window) }
+        return view
+    }
+
+    func updateNSView(_ nsView: NSView, context: Context) {
+        DispatchQueue.main.async { onWindow(nsView.window) }
     }
 }
