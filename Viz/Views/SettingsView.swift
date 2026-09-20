@@ -335,43 +335,28 @@ struct GeneralSettingsView: View {
 
 struct ShortcutsSettingsView: View {
     var body: some View {
-        VStack(alignment: .center) {
-            VStack(spacing: 10) {
-                    HStack {
-                        Text("Capture Content")
-                        Spacer()
-                        KeyboardShortcuts.Recorder(for: .captureContent)
-                    }
-                    HStack {
-                        Text("Capture Webcam")
-                        Spacer()
-                        KeyboardShortcuts.Recorder(for: .captureWebcam)
-                    }
-                    HStack {
-                        Text("Color Picker")
-                        Spacer()
-                        KeyboardShortcuts.Recorder(for: .eyedropper)
-                    }
-                    HStack {
-                        Text("History Window")
-                        Spacer()
-                        KeyboardShortcuts.Recorder(for: .history)
-                    }
-                    HStack {
-                        Text("Clear Clipboard")
-                        Spacer()
-                        KeyboardShortcuts.Recorder(for: .clear)
-                    }
-                }
-                .padding()
-                .vizGlassSurface(cornerRadius: VizTheme.cornerLarge)
-                .overlay(
-                    RoundedRectangle(cornerRadius: VizTheme.cornerLarge)
-                        .strokeBorder(VizTheme.accentSoft, lineWidth: 1)
-                )
+        SettingsSection(title: "Shortcuts") {
+            SettingsRow(title: "Capture Content", subtitle: "Extract text from a screen selection") {
+                KeyboardShortcuts.Recorder(for: .captureContent)
+            }
+            SettingsRowDivider()
+            SettingsRow(title: "Capture Webcam", subtitle: "Recognize content from the camera") {
+                KeyboardShortcuts.Recorder(for: .captureWebcam)
+            }
+            SettingsRowDivider()
+            SettingsRow(title: "Color Picker", subtitle: "Copy the colour under the cursor") {
+                KeyboardShortcuts.Recorder(for: .eyedropper)
+            }
+            SettingsRowDivider()
+            SettingsRow(title: "History Window", subtitle: "Open the capture history") {
+                KeyboardShortcuts.Recorder(for: .history)
+            }
+            SettingsRowDivider()
+            SettingsRow(title: "Clear Clipboard", subtitle: "Clear the clipboard and stored captures") {
+                KeyboardShortcuts.Recorder(for: .clear)
+            }
         }
-        .padding()
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 
@@ -381,26 +366,25 @@ struct UpdaterSettingsView: View {
     @EnvironmentObject private var updater: Updater
 
     var body: some View {
-        VStack(alignment: .center) {
-            VStack(alignment: .leading, spacing: 10) {
-
-                    HStack {
+        VStack(alignment: .leading, spacing: 18) {
+            SettingsSection(title: "Updates") {
+                SettingsRow(title: "Check for updates", subtitle: "How often Viz looks for a newer release") {
+                    HStack(spacing: 8) {
                         FrequencyView(updater: updater)
                         if updater.updateAvailable {
                             Divider()
                                 .padding(.trailing, 8)
                             UpdateBadge(updater: updater, hideLabel: true)
                         }
-
                     }
-                    .padding()
-                    .vizGlassSurface(cornerRadius: VizTheme.cornerSmall)
+                }
+            }
 
+            SettingsSection(title: "Releases") {
+                VStack(alignment: .leading, spacing: 12) {
                     RecentReleasesView(updater: updater)
                         .frame(height: 380)
                         .frame(maxWidth: .infinity)
-
-                    // === Buttons ==============================================================================================
 
                     HStack(alignment: .center, spacing: 20) {
                         Spacer()
@@ -420,14 +404,9 @@ struct UpdaterSettingsView: View {
                         Spacer()
                     }
                 }
-                .padding()
-                .vizGlassSurface(cornerRadius: VizTheme.cornerLarge)
-                .overlay(
-                    RoundedRectangle(cornerRadius: VizTheme.cornerLarge)
-                        .strokeBorder(VizTheme.accentSoft, lineWidth: 1)
-                )
+                .padding(14)
+            }
         }
-        .padding()
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
