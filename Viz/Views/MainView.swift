@@ -29,12 +29,12 @@ struct ContentView: View {
                     .bold()
                     .foregroundStyle(
                         LinearGradient(
-                            colors: [.red, .purple, .blue],
+                            colors: [VizTheme.accent, VizTheme.accentBright],
                             startPoint: .leading,
                             endPoint: .trailing
                         )
                     )
-                    .shadow(color: .black, radius: 2, x: 0, y: 0)
+                    .shadow(color: VizTheme.accent.opacity(0.35), radius: 3, x: 0, y: 1)
                     .padding(.leading, 5)
 
 
@@ -49,8 +49,8 @@ struct ContentView: View {
                         Image(systemName: updater.updateAvailable ? "arrow.down.circle" : "gear")
                             .font(.system(size: 17))
                     }
-                    .buttonStyle(.plain)
-                    .foregroundStyle(updater.updateAvailable ? .green : .secondary)
+                    .vizGlassButton()
+                    .foregroundStyle(updater.updateAvailable ? VizTheme.accent : .secondary)
 
                     Button {
                         NSApp.terminate(nil)
@@ -58,20 +58,19 @@ struct ContentView: View {
                         Image(systemName: "x.circle.fill")
                             .font(.system(size: 18))
                     }
-                    .buttonStyle(.plain)
+                    .vizGlassButton()
                     .foregroundStyle(.secondary)
                 }
                 .padding(4)
                 .padding(.horizontal, 2)
-                .background {
-                    Capsule()
-                        .fill(Color.secondary.opacity(0.2))
-                }
             }
             .padding(6)
+            // The header keeps its height when the popover is squeezed: a tight popover must
+            // never swallow the title or make the settings/quit buttons unreachable.
+            .fixedSize(horizontal: false, vertical: true)
 
 
-            HStack(spacing: 5) {
+            HStack(spacing: 8) {
                 VStack {
                     Button("Capture") {
                         CaptureService.shared.captureContent()

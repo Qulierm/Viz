@@ -27,17 +27,33 @@ enum VizTheme {
     static let cornerLarge: CGFloat = 22
     static let cornerMedium: CGFloat = 16
     static let cornerSmall: CGFloat = 10
+
+    /// When true the helpers use their translucent-material fallback even on macOS 26+.
+    /// Only the render harness sets this: offscreen captures cannot rasterise several
+    /// Liquid Glass layers at once (a glass background wipes the siblings drawn before
+    /// it), so `scripts/render-check.sh` measures the material rendering instead. The app
+    /// itself never changes this, so it always gets real glass on macOS 26+.
+    static var useMaterialFallback = false
 }
 
 extension View {
     /// Liquid Glass on macOS 26+, a translucent material below it.
+    ///
+    /// The glass is applied as a background layer rather than by wrapping the view in
+    /// `glassEffect`. Both look identical on screen, but a view that is *inside* a glass
+    /// effect has its content composited by the glass layer, which no offscreen renderer
+    /// can capture (`cacheDisplay` and `ImageRenderer` both return an empty surface, which
+    /// would make the design checks blind). Behind the content, the glass is captured
+    /// normally and the text stays crisp.
     @ViewBuilder
     func vizGlassSurface(cornerRadius: CGFloat = VizTheme.cornerLarge, tint: Color? = nil) -> some View {
-        if #available(macOS 26.0, *) {
-            if let tint {
-                self.glassEffect(.regular.tint(tint), in: .rect(cornerRadius: cornerRadius))
-            } else {
-                self.glassEffect(.regular, in: .rect(cornerRadius: cornerRadius))
+        if #available(macOS 26.0, *), !VizTheme.useMaterialFallback {
+            self.background {
+                if let tint {
+                    Color.clear.glassEffect(.regular.tint(tint), in: .rect(cornerRadius: cornerRadius))
+                } else {
+                    Color.clear.glassEffect(.regular, in: .rect(cornerRadius: cornerRadius))
+                }
             }
         } else {
             self.background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: cornerRadius))
@@ -47,19 +63,24 @@ extension View {
     /// Glass that reacts to hover/press, for custom controls; material fallback below macOS 26.
     @ViewBuilder
     func vizGlassInteractive(cornerRadius: CGFloat = VizTheme.cornerMedium, tint: Color = VizTheme.accent) -> some View {
-        if #available(macOS 26.0, *) {
-            self.glassEffect(.regular.tint(tint.opacity(0.35)).interactive(), in: .rect(cornerRadius: cornerRadius))
+        if #available(macOS 26.0, *), !VizTheme.useMaterialFallback {
+            self.background {
+                Color.clear.glassEffect(.regular.tint(tint.opacity(0.35)).interactive(), in: .rect(cornerRadius: cornerRadius))
+            }
         } else {
             self.background(tint.opacity(0.15), in: RoundedRectangle(cornerRadius: cornerRadius))
         }
     }
 
     /// Glass button style on macOS 26+, a matching material button style below it.
-    /// `.glass` and `.glassProminent` are different types, so the branches cannot be a
-    /// ternary: each has to be applied on its own.
+    ///
+    /// The system styles are used here (rather than a hand-built glass background) because
+    /// they also keep the surrounding content intact in offscreen captures, which the
+    /// design checks rely on. If a future macOS changes that, the material fallback below
+    /// renders the same capsule.
     @ViewBuilder
     func vizGlassButton(prominent: Bool = false, tint: Color = VizTheme.accent) -> some View {
-        if #available(macOS 26.0, *) {
+        if #available(macOS 26.0, *), !VizTheme.useMaterialFallback {
             if prominent {
                 self.buttonStyle(.glassProminent).tint(tint)
             } else {

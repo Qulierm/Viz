@@ -132,27 +132,28 @@ struct RoundedRectangleButtonStyle: ButtonStyle {
                     .font(.system(size: size))
                     .frame(width: size, height: size)
                     .fixedSize()
-                    .foregroundStyle(color ?? .primary)
+                    .foregroundStyle(VizTheme.accent)
                 configuration.label
                     .font(.footnote)
+                    .foregroundStyle(.primary)
 
                 if let shortcut = shortcut {
                     Text(shortcut.description)
                         .font(.footnote)
-                        .foregroundColor(.secondary)
+                        .foregroundStyle(.secondary)
                 }
             }
             Spacer()
         }
         .padding()
-        .background(isHovered ? Color.primary.opacity(0.3) : Color.primary.opacity(0.1))
+        .vizGlassInteractive(cornerRadius: VizTheme.cornerMedium)
         .foregroundColor(.primary)
         .overlay(
-            RoundedRectangle(cornerRadius: 10)
-                .strokeBorder(.primary.opacity(0.2), lineWidth: 1)
+            RoundedRectangle(cornerRadius: VizTheme.cornerMedium)
+                .strokeBorder(isHovered ? VizTheme.accentSoft : Color.secondary.opacity(0.18), lineWidth: 1)
         )
         .animation(.easeInOut(duration: 0.3), value: isHovered)
-        .cornerRadius(10)
+        .cornerRadius(VizTheme.cornerMedium)
         .scaleEffect(configuration.isPressed ? 0.95 : 1.0)
         .onHover { inside in
             isHovered = inside
@@ -173,13 +174,7 @@ struct ShortcutEditorView: View {
             HStack(spacing: 4) {
                 Text(shortcut.description)
                     .font(.system(size: 10))
-                    .foregroundStyle(.secondary)
-                    .padding(4)
-                    .padding(.horizontal, 2)
-                    .background {
-                        Capsule()
-                            .fill(Color.secondary.opacity(0.2))
-                    }
+                    .vizPill()
                     .onTapGesture {
                         openAppSettings()
                         dismiss()

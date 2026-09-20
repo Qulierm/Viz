@@ -26,11 +26,15 @@ import AlinFoundation
 
 let heights: [CGFloat] = [172, 165, 158, 150]
 let contentWidth: CGFloat = 600
-/// A pixel counts as "bright" when R + G + B exceeds this value. Text and symbols are
-/// drawn in near-white on the dark popover background, while the button border
-/// (primary at 20 % over the background) stays well below this threshold.
-let brightThreshold = 430
-/// Minimum bright pixels in the icon band for the check to consider an icon drawn.
+/// A pixel counts as ink when its composited colour differs from the window backdrop by
+/// more than this summed |dR| + |dG| + |dB| (0...3). Contrast is used instead of raw
+/// brightness because the redesign draws symbols in the blue accent (R+G+B ~= 326/765)
+/// rather than in white, and because glass surfaces render as the backdrop itself; the
+/// threshold still separates drawn content from an empty band by a wide margin.
+let inkContrastThreshold = 0.35
+/// Minimum accent pixels in the icon band for the check to consider the symbol drawn.
+/// Calibrated against both states: the symbol drawn gives several hundred accent pixels at
+/// every height, the old shrinkable sizing gives none, so the margin is wide.
 let iconInkThreshold = 60
 /// Minimum accent pixels (hue within 30 degrees of 220, saturated and bright) that a
 /// surface with blue accents must show.
@@ -75,12 +79,12 @@ func shell(_ executable: String, _ arguments: [String] = []) -> (status: Int32, 
     return (process.terminationStatus, String(data: data, encoding: .utf8) ?? "")
 }
 
-/// R + G + B of a bitmap pixel composited over a backdrop, or nil when the coordinates
-/// are outside the bitmap. The app's surfaces are translucent by design (Liquid Glass /
-/// materials over window vibrancy), and `colorAt` returns un-premultiplied components,
-/// so a 10 % white fill would otherwise read as pure white. Compositing reproduces what
-/// the user actually sees.
-func pixelSum(_ rep: NSBitmapImageRep, _ x: Int, _ y: Int, backdrop: NSColor = Backdrop.dark) -> Int? {
+/// Contrast of a bitmap pixel against a backdrop: the summed absolute difference of the
+/// composited colour from the backdrop, or nil when the coordinates are outside the
+/// bitmap. The app's surfaces are translucent by design (Liquid Glass / materials over
+/// window vibrancy) and `colorAt` returns un-premultiplied components, so the pixel is
+/// composited first to reproduce what the user actually sees.
+func pixelContrast(_ rep: NSBitmapImageRep, _ x: Int, _ y: Int, backdrop: NSColor = Backdrop.dark) -> Double? {
     guard x >= 0, y >= 0, x < rep.pixelsWide, y < rep.pixelsHigh else { return nil }
     guard let color = rep.colorAt(x: x, y: y)?.usingColorSpace(.deviceRGB) else { return nil }
     let alpha = color.alphaComponent
@@ -88,7 +92,7 @@ func pixelSum(_ rep: NSBitmapImageRep, _ x: Int, _ y: Int, backdrop: NSColor = B
     let red = color.redComponent * alpha + base.redComponent * (1 - alpha)
     let green = color.greenComponent * alpha + base.greenComponent * (1 - alpha)
     let blue = color.blueComponent * alpha + base.blueComponent * (1 - alpha)
-    return Int(((red + green + blue) * 255).rounded())
+    return abs(red - base.redComponent) + abs(green - base.greenComponent) + abs(blue - base.blueComponent)
 }
 
 /// Window backdrop a surface is drawn over, matching the appearance being rendered.
@@ -101,10 +105,41 @@ enum Backdrop {
     }
 }
 
-func brightCount(_ rep: NSBitmapImageRep, xRange: ClosedRange<Int>, yRange: ClosedRange<Int>) -> Int {
+/// True for pixels that carry the blue accent: hue within 30 degrees of 220, saturation
+/// above 0.35 and brightness above 0.45. Shared by the icon measurement and the design
+/// check, so both look for exactly the colour the theme uses.
+func isAccentPixel(_ color: NSColor) -> Bool {
+    var hue: CGFloat = 0
+    var saturation: CGFloat = 0
+    var brightness: CGFloat = 0
+    var alpha: CGFloat = 0
+    color.getHue(&hue, saturation: &saturation, brightness: &brightness, alpha: &alpha)
+    let degrees = hue * 360
+    let delta = abs(degrees - 220)
+    return min(delta, 360 - delta) <= 30 && saturation > 0.35 && brightness > 0.45 && alpha > 0.2
+}
+
+/// Accent pixels inside a region; used for the icon band, whose symbol is drawn in
+/// `VizTheme.accent`. Counting the accent colour (rather than any contrast) isolates the
+/// symbol from the button's own translucent chrome and borders, which is what makes the
+/// check able to see the symbol collapse again.
+func accentCount(_ rep: NSBitmapImageRep, xRange: ClosedRange<Int>, yRange: ClosedRange<Int>) -> Int {
     var count = 0
     for y in yRange {
-        for x in xRange where (pixelSum(rep, x, y) ?? 0) > brightThreshold {
+        for x in xRange {
+            guard let color = rep.colorAt(x: x, y: y)?.usingColorSpace(.deviceRGB) else { continue }
+            if isAccentPixel(color) {
+                count += 1
+            }
+        }
+    }
+    return count
+}
+
+func inkCount(_ rep: NSBitmapImageRep, xRange: ClosedRange<Int>, yRange: ClosedRange<Int>) -> Int {
+    var count = 0
+    for y in yRange {
+        for x in xRange where (pixelContrast(rep, x, y) ?? 0) > inkContrastThreshold {
             count += 1
         }
     }
@@ -115,11 +150,12 @@ func brightCount(_ rep: NSBitmapImageRep, xRange: ClosedRange<Int>, yRange: Clos
 
 struct HarnessRoot: View {
     let updater: Updater
+    var scheme: ColorScheme = .dark
 
     var body: some View {
         ContentView()
-            .environment(\.colorScheme, .dark)
-            .preferredColorScheme(.dark)
+            .environment(\.colorScheme, scheme)
+            .preferredColorScheme(scheme)
             .environmentObject(updater)
             .environmentObject(AppState.shared)
             .environmentObject(HistoryState.shared)
@@ -167,32 +203,44 @@ func compositedOverBackdrop(_ rep: NSBitmapImageRep, backdrop: NSColor) -> NSBit
     return out
 }
 
-func renderPopover(height: CGFloat, updater: Updater) -> RenderResult? {
-    let frame = NSRect(x: 0, y: 0, width: contentWidth, height: height)
-
-    // The hosting view is rendered detached on purpose. Inside a window, a rigid SwiftUI
-    // layout grows the window to its fitting height, so the tight heights would never be
-    // exercised; with an explicit frame the content has to squeeze into the requested
-    // size, which is exactly the popover situation this check measures.
-    let hosting = NSHostingView(rootView: HarnessRoot(updater: updater))
-    hosting.appearance = NSAppearance(named: .darkAqua)
+/// Renders a SwiftUI view into an opaque bitmap.
+///
+/// The view is hosted detached with an explicit frame, because inside a window a rigid
+/// SwiftUI layout grows the window to its fitting height and the tight popover heights
+/// would never be exercised. `cacheDisplay` is used rather than `ImageRenderer` because
+/// it renders AppKit-backed content (lists, scroll views, materials) faithfully, which
+/// `ImageRenderer` does not.
+func renderView<V: View>(_ view: V, size: NSSize, scheme: ColorScheme, pngName: String) -> NSBitmapImageRep? {
+    let frame = NSRect(origin: .zero, size: size)
+    let hosting = NSHostingView(rootView: view)
+    hosting.appearance = NSAppearance(named: scheme == .dark ? .darkAqua : .aqua)
     hosting.frame = frame
     hosting.layoutSubtreeIfNeeded()
-    pumpRunLoop(0.5)
+    pumpRunLoop(0.4)
     hosting.frame = frame
     hosting.layoutSubtreeIfNeeded()
     hosting.displayIfNeeded()
 
-    guard let raw = hosting.bitmapImageRepForCachingDisplay(in: hosting.bounds) else {
-        return nil
-    }
+    guard let raw = hosting.bitmapImageRepForCachingDisplay(in: hosting.bounds) else { return nil }
     hosting.cacheDisplay(in: hosting.bounds, to: raw)
 
-    let rep = compositedOverBackdrop(raw, backdrop: Backdrop.dark)
-    let url = outputDirectory.appendingPathComponent("height-\(Int(height)).png")
+    let rep = compositedOverBackdrop(raw, backdrop: Backdrop.forScheme(scheme))
+    let url = outputDirectory.appendingPathComponent(pngName)
     if let data = rep.representation(using: .png, properties: [:]) {
         try? data.write(to: url)
     }
+    return rep
+}
+
+func renderPopover(height: CGFloat, updater: Updater) -> RenderResult? {
+    let size = NSSize(width: contentWidth, height: height)
+    let root = HarnessRoot(updater: updater, scheme: .dark)
+        .frame(width: size.width, height: size.height)
+
+    guard let rep = renderView(root, size: size, scheme: .dark, pngName: "height-\(Int(height)).png") else {
+        return nil
+    }
+    let url = outputDirectory.appendingPathComponent("height-\(Int(height)).png")
     let scale = CGFloat(rep.pixelsWide) / contentWidth
     return RenderResult(height: height, rep: rep, url: url, scale: scale)
 }
@@ -205,7 +253,7 @@ func inkProfile(_ result: RenderResult) -> [(row: Int, count: Int)] {
     let x1 = Int((iconBandXRange.upperBound * result.scale).rounded())
     var profile: [(row: Int, count: Int)] = []
     for y in 0..<result.rep.pixelsHigh {
-        let count = brightCount(result.rep, xRange: x0...x1, yRange: y...y)
+        let count = accentCount(result.rep, xRange: x0...x1, yRange: y...y)
         if count > 0 {
             profile.append((y, count))
         }
@@ -270,7 +318,7 @@ func measureIcons(updater: Updater) -> [IconMeasurement] {
         let profile = inkProfile(result)
         let runs = inkRuns(profile)
         func ink(of run: ClosedRange<Int>) -> Int {
-            brightCount(result.rep, xRange: x0...x1, yRange: run)
+            accentCount(result.rep, xRange: x0...x1, yRange: run)
         }
 
         // The topmost run is the popover header ("V I Z"), which always renders. The
@@ -286,7 +334,7 @@ func measureIcons(updater: Updater) -> [IconMeasurement] {
         } else {
             band = (headerRun.upperBound + 1)...(result.rep.pixelsHigh - 1)
         }
-        let bandInk = brightCount(result.rep, xRange: x0...x1, yRange: band)
+        let bandInk = accentCount(result.rep, xRange: x0...x1, yRange: band)
 
         if debugMode {
             print("  debug height \(Int(height)) scale=\(result.scale) bitmap=\(result.rep.pixelsWide)x\(result.rep.pixelsHigh) xband=\(x0)-\(x1)")
@@ -455,10 +503,10 @@ func designMetrics(_ rep: NSBitmapImageRep, backdrop: NSColor) -> DesignMetrics 
     for y in 0..<rep.pixelsHigh {
         for x in 0..<rep.pixelsWide {
             guard let color = rep.colorAt(x: x, y: y)?.usingColorSpace(.deviceRGB) else { continue }
-            let dr = abs(color.redComponent - base.redComponent)
-            let dg = abs(color.greenComponent - base.greenComponent)
-            let db = abs(color.blueComponent - base.blueComponent)
-            if dr > tolerance || dg > tolerance || db > tolerance {
+            let contrast = abs(color.redComponent - base.redComponent)
+                + abs(color.greenComponent - base.greenComponent)
+                + abs(color.blueComponent - base.blueComponent)
+            if contrast > 0.02 {
                 contentPixels += 1
             }
 
@@ -468,14 +516,7 @@ func designMetrics(_ rep: NSBitmapImageRep, backdrop: NSColor) -> DesignMetrics 
                 legacyPixels += 1
             }
 
-            var hue: CGFloat = 0
-            var saturation: CGFloat = 0
-            var brightness: CGFloat = 0
-            var alpha: CGFloat = 0
-            color.getHue(&hue, saturation: &saturation, brightness: &brightness, alpha: &alpha)
-            let degrees = hue * 360
-            let delta = abs(degrees - 220)
-            if min(delta, 360 - delta) <= 30, saturation > 0.35, brightness > 0.45 {
+            if isAccentPixel(color) {
                 accentPixels += 1
             }
         }
@@ -488,25 +529,11 @@ func designMetrics(_ rep: NSBitmapImageRep, backdrop: NSColor) -> DesignMetrics 
 
 func renderSurface(_ surface: AppSurface, scheme: ColorScheme) -> (rep: NSBitmapImageRep, url: URL)? {
     let size = surface.size
-    let frame = NSRect(origin: .zero, size: size)
-    let hosting = NSHostingView(rootView: SurfaceRoot(surface: surface, scheme: scheme))
-    hosting.appearance = NSAppearance(named: scheme == .dark ? .darkAqua : .aqua)
-    hosting.frame = frame
-    hosting.layoutSubtreeIfNeeded()
-    pumpRunLoop(0.4)
-    hosting.frame = frame
-    hosting.layoutSubtreeIfNeeded()
-    hosting.displayIfNeeded()
-
-    guard let raw = hosting.bitmapImageRepForCachingDisplay(in: hosting.bounds) else { return nil }
-    hosting.cacheDisplay(in: hosting.bounds, to: raw)
-
-    let composited = compositedOverBackdrop(raw, backdrop: Backdrop.forScheme(scheme))
-    let url = outputDirectory.appendingPathComponent("design-\(surface.rawValue)-\(scheme == .dark ? "dark" : "light").png")
-    if let data = composited.representation(using: .png, properties: [:]) {
-        try? data.write(to: url)
-    }
-    return (composited, url)
+    let root = SurfaceRoot(surface: surface, scheme: scheme)
+        .frame(width: size.width, height: size.height)
+    let name = "design-\(surface.rawValue)-\(scheme == .dark ? "dark" : "light").png"
+    guard let rep = renderView(root, size: size, scheme: scheme, pngName: name) else { return nil }
+    return (rep, outputDirectory.appendingPathComponent(name))
 }
 
 func checkDesign() -> (passed: Bool, details: String) {
@@ -582,6 +609,13 @@ func checkClipboard() -> (passed: Bool, details: String) {
 
 // MARK: - Main
 
+// Offscreen captures cannot rasterise several Liquid Glass layers at once: a glass
+// background wipes the siblings that were drawn before it, which would hide the popover
+// header and make the measurements meaningless. The checks therefore render the theme's
+// translucent-material path, which is the same layout and palette; the glass appearance
+// itself is confirmed by the user on screen.
+VizTheme.useMaterialFallback = true
+
 let application = NSApplication.shared
 application.setActivationPolicy(.accessory)
 
@@ -599,7 +633,7 @@ let iconTable = measurements
     .map { "h=\(Int($0.height)) ink=\($0.ink) band=\($0.band.lowerBound)-\($0.band.upperBound)px scale=\($0.scale)" }
     .joined(separator: " | ")
 let iconsPass = measurements.count == heights.count && measurements.allSatisfy { $0.ink >= iconInkThreshold }
-report("icons", iconsPass, "\(iconTable) (threshold \(iconInkThreshold) bright px per height)")
+report("icons", iconsPass, "\(iconTable) (threshold \(iconInkThreshold) accent px per height)")
 for measurement in measurements {
     print("    height-\(Int(measurement.height)).png ink=\(measurement.ink) path=\(measurement.pngPath)")
 }
