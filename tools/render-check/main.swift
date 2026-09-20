@@ -32,9 +32,10 @@ let contentWidth: CGFloat = 600
 /// rather than in white, and because glass surfaces render as the backdrop itself; the
 /// threshold still separates drawn content from an empty band by a wide margin.
 let inkContrastThreshold = 0.35
-/// Minimum accent pixels in the icon band for the check to consider the symbol drawn.
-/// Calibrated against both states: the symbol drawn gives several hundred accent pixels at
-/// every height, the old shrinkable sizing gives none, so the margin is wide.
+/// Minimum ink pixels in the icon band for the check to consider the symbol drawn, using
+/// the luminance-contrast metric above. Calibrated against both states: the symbol drawn
+/// gives several hundred ink pixels at every height, the old shrinkable sizing gives
+/// almost none, so the margin is wide.
 let iconInkThreshold = 60
 /// Minimum accent pixels (hue within 30 degrees of 220, saturated and bright) that a
 /// surface with blue accents must show.
@@ -134,6 +135,41 @@ func accentCount(_ rep: NSBitmapImageRep, xRange: ClosedRange<Int>, yRange: Clos
         }
     }
     return count
+}
+
+/// Rec. 709 luminance of a bitmap pixel composited over a backdrop, or nil when the
+/// coordinates are outside the bitmap.
+func pixelLuminance(_ rep: NSBitmapImageRep, _ x: Int, _ y: Int, backdrop: NSColor = Backdrop.dark) -> Double? {
+    guard x >= 0, y >= 0, x < rep.pixelsWide, y < rep.pixelsHigh else { return nil }
+    guard let color = rep.colorAt(x: x, y: y)?.usingColorSpace(.deviceRGB) else { return nil }
+    let alpha = color.alphaComponent
+    let base = backdrop.usingColorSpace(.deviceRGB) ?? .black
+    let red = color.redComponent * alpha + base.redComponent * (1 - alpha)
+    let green = color.greenComponent * alpha + base.greenComponent * (1 - alpha)
+    let blue = color.blueComponent * alpha + base.blueComponent * (1 - alpha)
+    return 0.2126 * red + 0.7152 * green + 0.0722 * blue
+}
+
+/// Counts pixels in a region whose luminance differs from that region's *median*
+/// luminance by more than `threshold` (0...1). The median is the surface the region is
+/// drawn on, so the metric measures ink regardless of whether the symbols are white or
+/// blue and regardless of the button surface colour.
+func luminanceInkCount(_ rep: NSBitmapImageRep,
+                       xRange: ClosedRange<Int>,
+                       yRange: ClosedRange<Int>,
+                       threshold: Double = 40.0 / 255.0) -> Int {
+    var values: [Double] = []
+    for y in yRange {
+        for x in xRange {
+            if let value = pixelLuminance(rep, x, y) {
+                values.append(value)
+            }
+        }
+    }
+    guard !values.isEmpty else { return 0 }
+    let sorted = values.sorted()
+    let median = sorted[sorted.count / 2]
+    return values.reduce(0) { $0 + (abs($1 - median) > threshold ? 1 : 0) }
 }
 
 func inkCount(_ rep: NSBitmapImageRep, xRange: ClosedRange<Int>, yRange: ClosedRange<Int>) -> Int {
@@ -253,7 +289,7 @@ func inkProfile(_ result: RenderResult) -> [(row: Int, count: Int)] {
     let x1 = Int((iconBandXRange.upperBound * result.scale).rounded())
     var profile: [(row: Int, count: Int)] = []
     for y in 0..<result.rep.pixelsHigh {
-        let count = accentCount(result.rep, xRange: x0...x1, yRange: y...y)
+        let count = luminanceInkCount(result.rep, xRange: x0...x1, yRange: y...y)
         if count > 0 {
             profile.append((y, count))
         }
@@ -318,28 +354,32 @@ func measureIcons(updater: Updater) -> [IconMeasurement] {
         let profile = inkProfile(result)
         let runs = inkRuns(profile)
         func ink(of run: ClosedRange<Int>) -> Int {
-            accentCount(result.rep, xRange: x0...x1, yRange: run)
+            luminanceInkCount(result.rep, xRange: x0...x1, yRange: run)
         }
 
-        // The topmost run is the popover header ("V I Z"), which always renders. The
-        // widest run below it is the button label. The icon band is everything between
-        // the header and the label: when the symbol renders it fills that band with
-        // ink, and when it collapses the band stays empty while the label survives.
+        // The topmost run is the popover header ("V I Z"), which always renders. The run
+        // below it is the button's own top edge, and the widest run below that is the
+        // label. The icon band is what lies between the button edge and the label: when the
+        // symbol renders it fills that band with ink, and when it collapses the band keeps
+        // only the flat button surface, whose pixels all match the band median.
         let headerRun = runs.first ?? 0...0
         let below = runs.filter { $0.lowerBound > headerRun.upperBound }
         let labelRun = below.max { ink(of: $0) < ink(of: $1) }
+        let chromeRun = below.first { $0.upperBound < (labelRun?.lowerBound ?? Int.max) }
         let band: ClosedRange<Int>
-        if let labelRun {
+        if let labelRun, let chromeRun, chromeRun.upperBound + 1 < labelRun.lowerBound {
+            band = (chromeRun.upperBound + 1)...(labelRun.lowerBound - 1)
+        } else if let labelRun {
             band = (headerRun.upperBound + 1)...max(headerRun.upperBound + 1, labelRun.lowerBound - 1)
         } else {
             band = (headerRun.upperBound + 1)...(result.rep.pixelsHigh - 1)
         }
-        let bandInk = accentCount(result.rep, xRange: x0...x1, yRange: band)
+        let bandInk = luminanceInkCount(result.rep, xRange: x0...x1, yRange: band)
 
         if debugMode {
             print("  debug height \(Int(height)) scale=\(result.scale) bitmap=\(result.rep.pixelsWide)x\(result.rep.pixelsHigh) xband=\(x0)-\(x1)")
             print("  debug runs: \(runs.map { "\($0.lowerBound)-\($0.upperBound)[\(ink(of: $0))]" }.joined(separator: " "))")
-            print("  debug header=\(headerRun.lowerBound)-\(headerRun.upperBound) label=\(labelRun.map { "\($0.lowerBound)-\($0.upperBound)" } ?? "none") band=\(band.lowerBound)-\(band.upperBound) ink=\(bandInk)")
+            print("  debug header=\(headerRun.lowerBound)-\(headerRun.upperBound) chrome=\(chromeRun.map { "\($0.lowerBound)-\($0.upperBound)" } ?? "none") label=\(labelRun.map { "\($0.lowerBound)-\($0.upperBound)" } ?? "none") band=\(band.lowerBound)-\(band.upperBound) ink=\(bandInk)")
         }
 
         measurements.append(IconMeasurement(height: height, scale: result.scale, band: band, ink: bandInk, runs: runs, pngPath: result.url.path))
@@ -642,7 +682,7 @@ let iconTable = measurements
     .map { "h=\(Int($0.height)) ink=\($0.ink) band=\($0.band.lowerBound)-\($0.band.upperBound)px scale=\($0.scale)" }
     .joined(separator: " | ")
 let iconsPass = measurements.count == heights.count && measurements.allSatisfy { $0.ink >= iconInkThreshold }
-report("icons", iconsPass, "\(iconTable) (threshold \(iconInkThreshold) accent px per height)")
+report("icons", iconsPass, "\(iconTable) (threshold \(iconInkThreshold) ink px per height)")
 for measurement in measurements {
     print("    height-\(Int(measurement.height)).png ink=\(measurement.ink) path=\(measurement.pngPath)")
 }

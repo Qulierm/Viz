@@ -48,8 +48,9 @@ struct ContentView: View {
                     } label: {
                         Image(systemName: updater.updateAvailable ? "arrow.down.circle" : "gear")
                             .font(.system(size: 17))
+                            .vizGlassBubble(tint: updater.updateAvailable ? VizTheme.accent.opacity(0.35) : nil)
                     }
-                    .vizGlassButton()
+                    .buttonStyle(.plain)
                     .foregroundStyle(updater.updateAvailable ? VizTheme.accent : .secondary)
 
                     Button {
@@ -57,8 +58,9 @@ struct ContentView: View {
                     } label: {
                         Image(systemName: "x.circle.fill")
                             .font(.system(size: 18))
+                            .vizGlassBubble()
                     }
-                    .vizGlassButton()
+                    .buttonStyle(.plain)
                     .foregroundStyle(.secondary)
                 }
                 .padding(4)

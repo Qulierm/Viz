@@ -91,14 +91,42 @@ extension View {
         }
     }
 
+    /// Neutral glass control surface: no accent tint, just the material. Used by the
+    /// popover action buttons, which must stay grey so the blue accent keeps meaning.
+    @ViewBuilder
+    func vizGlassControl(cornerRadius: CGFloat = VizTheme.cornerMedium) -> some View {
+        if #available(macOS 26.0, *), !VizTheme.useMaterialFallback {
+            self.background {
+                Color.clear.glassEffect(.regular.interactive(), in: .rect(cornerRadius: cornerRadius))
+            }
+        } else {
+            self
+                .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: cornerRadius))
+                .overlay(
+                    RoundedRectangle(cornerRadius: cornerRadius)
+                        .strokeBorder(Color.primary.opacity(0.10), lineWidth: 1)
+                )
+        }
+    }
+
+    /// Circular glass control surface (the header bubbles). Neutral by default; pass a
+    /// tint for a meaningful state such as an available update.
+    @ViewBuilder
+    func vizGlassBubble(size: CGFloat = 28, tint: Color? = nil) -> some View {
+        self
+            .frame(width: size, height: size)
+            .vizGlassSurface(cornerRadius: size / 2, tint: tint)
+            .contentShape(Circle())
+    }
+
     /// Capsule used for shortcut hints and small labels.
-    func vizPill(tint: Color = VizTheme.accent) -> some View {
+    func vizPill() -> some View {
         self
             .fixedSize()
             .padding(.horizontal, 6)
             .padding(.vertical, 3)
             .background(.ultraThinMaterial, in: Capsule())
-            .overlay(Capsule().strokeBorder(tint.opacity(0.35), lineWidth: 1))
+            .overlay(Capsule().strokeBorder(Color.primary.opacity(0.12), lineWidth: 1))
             .foregroundStyle(.secondary)
     }
 }

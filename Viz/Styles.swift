@@ -132,7 +132,7 @@ struct RoundedRectangleButtonStyle: ButtonStyle {
                     .font(.system(size: size))
                     .frame(width: size, height: size)
                     .fixedSize()
-                    .foregroundStyle(VizTheme.accent)
+                    .foregroundStyle(.primary)
                 configuration.label
                     .font(.footnote)
                     .foregroundStyle(.primary)
@@ -146,11 +146,11 @@ struct RoundedRectangleButtonStyle: ButtonStyle {
             Spacer()
         }
         .padding()
-        .vizGlassInteractive(cornerRadius: VizTheme.cornerMedium)
+        .vizGlassControl(cornerRadius: VizTheme.cornerMedium)
         .foregroundColor(.primary)
         .overlay(
             RoundedRectangle(cornerRadius: VizTheme.cornerMedium)
-                .strokeBorder(isHovered ? VizTheme.accentSoft : Color.secondary.opacity(0.18), lineWidth: 1)
+                .strokeBorder(isHovered ? Color.primary.opacity(0.22) : Color.secondary.opacity(0.18), lineWidth: 1)
         )
         .animation(.easeInOut(duration: 0.3), value: isHovered)
         .cornerRadius(VizTheme.cornerMedium)
