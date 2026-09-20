@@ -135,7 +135,7 @@ struct ContentView: View {
 
 
         }
-        .background(Color("bg"))
+        .background(Color.vizBackground)
         .frame(width: 600)
     }
 }

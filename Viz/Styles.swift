@@ -245,7 +245,7 @@ struct SpacedProcessingToggle: ToggleStyle {
                         .foregroundStyle(.secondary)
                         .textSelection(.disabled)
                 }
-                .background(Color("bg").padding(-80))
+                .background(Color.vizBackground.padding(-80))
                 .padding()
             }
 
@@ -366,7 +366,7 @@ struct TrailingRoundedRectangle: Shape {
 extension NSTextView {
     open override var frame: CGRect {
         didSet {
-            insertionPointColor = NSColor(named: "mode")//.clear
+            insertionPointColor = NSColor.vizInsertionPoint//.clear
         }
     }
 }

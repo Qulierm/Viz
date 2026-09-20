@@ -67,7 +67,7 @@ struct SettingsView: View {
                 .tag(3)
         }
         .frame(maxWidth: 500, maxHeight: .infinity)
-        .background(Color("bg"))
+        .background(Color.vizBackground)
         .environment(\.colorScheme, .dark)
         .preferredColorScheme(.dark)
     }
