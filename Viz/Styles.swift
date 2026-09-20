@@ -37,6 +37,7 @@ struct InfoButton: View {
                     .frame(width: 14, height: 14)
                     .foregroundColor(!warning ? color.opacity(0.7) : color)
                     .frame(height: 16)
+                    .fixedSize()
                 if !label.isEmpty {
                     Text(label)
                         .font(.callout)
@@ -86,9 +87,11 @@ struct SimpleButtonBrightStyle: ButtonStyle {
     func makeBody(configuration: Self.Configuration) -> some View {
         HStack {
             Image(systemName: icon)
-                .resizable()
-                .scaledToFit()
-                .frame(width: 20)
+                // Same hardening as the popover buttons: size the symbol by font, give it a
+                // square slot and make that slot rigid so it cannot be squeezed away.
+                .font(.system(size: 20))
+                .frame(width: 20, height: 20)
+                .fixedSize()
                 .foregroundColor(hovered ? color.opacity(0.5) : color)
         }
         .padding(5)
@@ -122,10 +125,14 @@ struct RoundedRectangleButtonStyle: ButtonStyle {
             Spacer()
             VStack(alignment: .center, spacing: 10) {
                 Image(systemName: image)
-                    .resizable()
-                    .aspectRatio(contentMode: .fit)
-                    .frame(width: size)
-                    .foregroundColor(color)
+                    // A `.resizable()` symbol image has no intrinsic size, so it is the first
+                    // thing a tight popover height squeezes on macOS 27, collapsing the icon
+                    // to nothing while the labels survive. Font-based sizing keeps the symbol
+                    // at its point size, and `.fixedSize()` makes the slot rigid.
+                    .font(.system(size: size))
+                    .frame(width: size, height: size)
+                    .fixedSize()
+                    .foregroundStyle(color ?? .primary)
                 configuration.label
                     .font(.footnote)
 
@@ -400,6 +407,7 @@ struct SimpleButtonStyle: ButtonStyle {
                 .resizable()
                 .scaledToFit()
                 .frame(width: size, height: size)
+                .fixedSize()
                 .scaleEffect(hovered ? 1.1 : 1.0)
                 .rotationEffect(.degrees(rotate ? (hovered ? 90 : 0) : 0))
                 .animation(.easeInOut(duration: 0.2), value: hovered)
