@@ -9,6 +9,7 @@ import Foundation
 import SwiftUI
 import AppKit
 import ServiceManagement
+import AlinFoundation
 
 
 
@@ -16,11 +17,37 @@ import ServiceManagement
 
 
 func copyTextItemsToClipboard(textItems: [TextItem]) {
+    let combinedText = textItems.map { $0.text }.joined(separator: "\n")
     let pasteboard = NSPasteboard.general
     pasteboard.clearContents()
 
-    let combinedText = textItems.map { $0.text }.joined(separator: "\n")
-    pasteboard.setString(combinedText, forType: .string)
+    // Only trust the write once the value can be read back: a silently failed write would
+    // leave the clipboard empty even though captures keep succeeding.
+    if pasteboard.setString(combinedText, forType: .string),
+       pasteboard.string(forType: .string) == combinedText {
+        return
+    }
+
+    // Fallback: write through a separate process, which is not affected by anything
+    // that may block this process' own pasteboard access.
+    let process = Process()
+    process.executableURL = URL(fileURLWithPath: "/usr/bin/pbcopy")
+    let pipe = Pipe()
+    process.standardInput = pipe
+    do {
+        try process.run()
+        pipe.fileHandleForWriting.write(Data(combinedText.utf8))
+        try? pipe.fileHandleForWriting.close()
+        process.waitUntilExit()
+    } catch {
+        printOS("Clipboard write failed: \(error.localizedDescription)")
+        AppState.shared.cmdOutput = "Failed to copy captured text to the clipboard."
+        return
+    }
+    if process.terminationStatus != 0 {
+        printOS("Clipboard fallback (pbcopy) failed with status \(process.terminationStatus)")
+        AppState.shared.cmdOutput = "Failed to copy captured text to the clipboard."
+    }
 }
 
 func copyColorsToClipboard(color: ColorItem) {

@@ -14,6 +14,13 @@ var previewWindow: NSWindow?
 var cmdOutputWindow: NSWindow?
 var colorWindow: NSWindow?
 
+/// Borderless windows cannot become key by default, which makes the preview's text
+/// unselectable for copying. This subclass allows key without becoming main.
+final class KeyablePreviewWindow: NSWindow {
+    override var canBecomeKey: Bool { true }
+    override var canBecomeMain: Bool { false }
+}
+
 
 struct PreviewContentView: View {
     @ObservedObject var appState = AppState.shared
@@ -135,10 +142,10 @@ func showPreviewWindow<Content: View>(contentView: Content) {
     let hostingView = NSHostingView(rootView: contentView)
     hostingView.frame = CGRect(x: 0, y: 0, width: viewWidth, height: height)
 
-    previewWindow = NSWindow(contentRect: NSRect(x: 0, y: 0, width: viewWidth, height: height),
-                             styleMask: .borderless,
-                             backing: .buffered,
-                             defer: false)
+    previewWindow = KeyablePreviewWindow(contentRect: NSRect(x: 0, y: 0, width: viewWidth, height: height),
+                                        styleMask: .borderless,
+                                        backing: .buffered,
+                                        defer: false)
     previewWindow?.contentView = hostingView
     previewWindow?.contentView?.wantsLayer = true
     previewWindow?.contentView?.layer?.cornerRadius = 10
@@ -155,8 +162,20 @@ func showPreviewWindow<Content: View>(contentView: Content) {
     }
 
     previewWindow?.orderFront(nil)
-    DispatchQueue.main.asyncAfter(deadline: .now() + seconds) {
-        previewWindow?.orderOut(nil)
-        previewWindow = nil
+
+    // Hide after the configured delay, but never while the user is working with the
+    // preview: if the window is key (text selected, ⌘C pressed) the hide is postponed
+    // once instead of pulling the window away mid-interaction.
+    func hidePreview(after delay: Double, allowReschedule: Bool) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
+            guard let window = previewWindow else { return }
+            if window.isKeyWindow && allowReschedule {
+                hidePreview(after: delay, allowReschedule: false)
+                return
+            }
+            window.orderOut(nil)
+            previewWindow = nil
+        }
     }
+    hidePreview(after: seconds, allowReschedule: true)
 }
