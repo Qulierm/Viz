@@ -52,21 +52,26 @@ let popoverAccentFloor = 300
 /// neutral glass; anything blue there means the accent has crept back into the main menu.
 let buttonAccentShareLimit = 0.015
 /// The restored Viz surface must read as the classic blue-grey: the blue channel has to
-/// exceed red by at least this much. A neutral material surface gives 0, the tinted surface
-/// measures 6-8, and the opaque display-P3 #313443 measures 21 - so the upper bound is what
-/// fails when the surface is painted flat instead of tinted. Both bounds sit midway between
-/// the measured states, which leaves several points of headroom on each side.
-let surfaceCastMinimum: Double = 4
-let surfaceCastMaximum: Double = 15
+/// exceed red by at least this much. Measured: a neutral material surface gives 0, the light
+/// tint (0.15 roots, 0.20 cards) gives 2 (popover, light) to 7 (settings, dark), and the
+/// opaque display-P3 #313443 gives 21 - so the low bound rejects a colourless surface and
+/// the high bound rejects flat paint.
+let surfaceCastMinimum: Double = 1
+let surfaceCastMaximum: Double = 14
+/// Minimum per-channel difference between the surface rendered over the dark backdrop and
+/// over a bright one. A translucent surface follows its backdrop (the deltas measured here
+/// are in the hundreds); an opaque surface renders identically and gives 0.
+let translucencyDeltaMinimum: Double = 6
 /// Minimum pixels per hue window (red ~0, purple ~285, blue ~220 degrees) in the title band
 /// of the popover and about renders, proving the red-purple-blue brand gradient is back.
 let brandHuePixelMinimum = 40
 /// Minimum green pixels (hue within 30 degrees of 120) in the dark popover render, which is
 /// the update-available bubble.
 let successPixelMinimum = 40
-/// Ceiling for the popover's natural height. The popover measures about 161 pt after the
-/// padding trim (it was 177 pt), so this catches a regression back to the taller layout.
-let popoverHeightCeiling: CGFloat = 170
+/// Ceiling for the popover's natural height. The popover measures 145 pt after the second
+/// padding trim (it was 161 pt, and 177 pt before that), so this catches a regression back
+/// to either taller layout.
+let popoverHeightCeiling: CGFloat = 155
 /// Minimum number of bright pixels in the shortcut-pill band of the dark popover render.
 /// The hints are drawn in the primary label colour (white in dark), which yields ~800 such
 /// pixels; `.secondary` leaves the band almost dark, so this catches a return to grey.
@@ -141,6 +146,9 @@ func pixelContrast(_ rep: NSBitmapImageRep, _ x: Int, _ y: Int, backdrop: NSColo
 enum Backdrop {
     static let dark = NSColor(srgbRed: 0.13, green: 0.13, blue: 0.15, alpha: 1)
     static let light = NSColor(srgbRed: 0.93, green: 0.93, blue: 0.94, alpha: 1)
+    /// A bright backdrop used with the *dark* appearance to prove a surface is translucent:
+    /// a translucent surface follows the backdrop, an opaque one ignores it.
+    static let bright = NSColor(srgbRed: 0.86, green: 0.86, blue: 0.90, alpha: 1)
 
     static func forScheme(_ scheme: ColorScheme) -> NSColor {
         scheme == .dark ? dark : light
@@ -287,21 +295,38 @@ func compositedOverBackdrop(_ rep: NSBitmapImageRep, backdrop: NSColor) -> NSBit
 /// would never be exercised. `cacheDisplay` is used rather than `ImageRenderer` because
 /// it renders AppKit-backed content (lists, scroll views, materials) faithfully, which
 /// `ImageRenderer` does not.
-func renderView<V: View>(_ view: V, size: NSSize, scheme: ColorScheme, pngName: String) -> NSBitmapImageRep? {
+func renderView<V: View>(_ view: V, size: NSSize, scheme: ColorScheme, pngName: String,
+                backdrop: NSColor? = nil, windowBackdrop: NSColor? = nil) -> NSBitmapImageRep? {
     let frame = NSRect(origin: .zero, size: size)
     let hosting = NSHostingView(rootView: view)
     hosting.appearance = NSAppearance(named: scheme == .dark ? .darkAqua : .aqua)
     hosting.frame = frame
+
+    // Materials sample the surface *behind* them, so a detached hosting view renders them
+    // from nothing. When a window backdrop is given, the view is hosted in a window of that
+    // colour first: that is what makes translucency measurable.
+    var window: NSWindow?
+    if let windowBackdrop {
+        let host = NSWindow(contentRect: frame, styleMask: .borderless, backing: .buffered, defer: false)
+        host.backgroundColor = windowBackdrop
+        host.isOpaque = true
+        host.contentView = hosting
+        host.orderFront(nil)
+        window = host
+    }
+
     hosting.layoutSubtreeIfNeeded()
     pumpRunLoop(0.4)
     hosting.frame = frame
     hosting.layoutSubtreeIfNeeded()
     hosting.displayIfNeeded()
 
+    defer { window?.orderOut(nil) }
+
     guard let raw = hosting.bitmapImageRepForCachingDisplay(in: hosting.bounds) else { return nil }
     hosting.cacheDisplay(in: hosting.bounds, to: raw)
 
-    let rep = compositedOverBackdrop(raw, backdrop: Backdrop.forScheme(scheme))
+    let rep = compositedOverBackdrop(raw, backdrop: backdrop ?? Backdrop.forScheme(scheme))
     let url = outputDirectory.appendingPathComponent(pngName)
     if let data = rep.representation(using: .png, properties: [:]) {
         try? data.write(to: url)
@@ -569,6 +594,62 @@ func hintBrightPixels(_ rep: NSBitmapImageRep, backdrop: NSColor, bandStart: Dou
         }
     }
     return bright
+}
+
+// --- translucency ----------------------------------------------------------
+
+/// Renders the same surface over two different backdrops and compares the surface colour:
+/// a translucent (glass or material) surface follows its backdrop, while an opaque one
+/// renders identically and fails. This is the guard against the backgrounds silently
+/// becoming flat paint again.
+func checkTranslucency() -> (passed: Bool, details: String) {
+    var failures: [String] = []
+    var summaries: [String] = []
+
+    for surface in [AppSurface.popover, AppSurface.settings] {
+        let size = surface.size
+        // The backdrop is part of the rendered hierarchy: a material samples what is behind
+        // it inside the same view tree, so a colour placed here is what the surface blurs.
+        func root(over backdrop: Color) -> some View {
+            ZStack {
+                backdrop
+                SurfaceRoot(surface: surface, scheme: .dark)
+            }
+            .frame(width: size.width, height: size.height)
+        }
+
+        guard let darkRep = renderView(root(over: Color(nsColor: Backdrop.dark)), size: size, scheme: .dark,
+                                       pngName: "translucency-\(surface.rawValue)-dark-backdrop.png",
+                                       backdrop: Backdrop.dark),
+              let brightRep = renderView(root(over: Color(nsColor: Backdrop.bright)), size: size, scheme: .dark,
+                                         pngName: "translucency-\(surface.rawValue)-bright-backdrop.png",
+                                         backdrop: Backdrop.bright),
+              let onDark = dominantSurfaceColor(darkRep, backdrop: Backdrop.dark),
+              let onBright = dominantSurfaceColor(brightRep, backdrop: Backdrop.bright) else {
+            failures.append("\(surface.rawValue):render")
+            summaries.append("\(surface.rawValue) RENDER-FAILED")
+            continue
+        }
+
+        let deltaRed = abs(onDark.r - onBright.r) * 255
+        let deltaGreen = abs(onDark.g - onBright.g) * 255
+        let deltaBlue = abs(onDark.b - onBright.b) * 255
+        let smallest = min(deltaRed, min(deltaGreen, deltaBlue))
+
+        summaries.append(String(format: "%@ dark=%d,%d,%d bright=%d,%d,%d delta=%d/%d/%d",
+                                surface.rawValue,
+                                Int(onDark.r * 255), Int(onDark.g * 255), Int(onDark.b * 255),
+                                Int(onBright.r * 255), Int(onBright.g * 255), Int(onBright.b * 255),
+                                Int(deltaRed), Int(deltaGreen), Int(deltaBlue)))
+
+        if smallest < translucencyDeltaMinimum {
+            failures.append(String(format: "%@ surface barely follows the backdrop (smallest delta %.0f < %.0f)",
+                                    surface.rawValue, smallest, translucencyDeltaMinimum))
+        }
+    }
+
+    let details = summaries.joined(separator: " | ") + (failures.isEmpty ? "" : " -> failed: \(failures.joined(separator: ", "))")
+    return (failures.isEmpty, details)
 }
 
 // --- window size -----------------------------------------------------------
@@ -1234,7 +1315,11 @@ report("clipboard", clipboard.passed, clipboard.details)
 let windowSize = checkWindowSize()
 report("windowsize", windowSize.passed, windowSize.details)
 
-// 6. design
+// 6. translucency
+let translucency = checkTranslucency()
+report("translucency", translucency.passed, translucency.details)
+
+// 7. design
 let design = checkDesign()
 report("design", design.passed, design.details)
 for surface in AppSurface.allCases {
