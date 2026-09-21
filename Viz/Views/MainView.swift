@@ -66,14 +66,14 @@ struct ContentView: View {
                 .padding(4)
                 .padding(.horizontal, 2)
             }
-            .padding(6)
+            .padding(5)
             // The header keeps its height when the popover is squeezed: a tight popover must
             // never swallow the title or make the settings/quit buttons unreachable.
             .fixedSize(horizontal: false, vertical: true)
 
 
             HStack(spacing: 8) {
-                VStack(spacing: 6) {
+                VStack(spacing: 4) {
                     Button("Capture") {
                         CaptureService.shared.captureContent()
                         dismiss()
@@ -86,7 +86,7 @@ struct ContentView: View {
                 }
 
 
-                VStack(spacing: 6) {
+                VStack(spacing: 4) {
                     Button("Webcam") {
                         dismiss()
                         openWebcamCapture()
@@ -98,7 +98,7 @@ struct ContentView: View {
 
                 }
 
-                VStack(spacing: 6) {
+                VStack(spacing: 4) {
                     Button("Color") {
                         dismiss()
                         processColor()
@@ -109,7 +109,7 @@ struct ContentView: View {
                     ShortcutEditorView(name: .eyedropper)
                 }
 
-                VStack(spacing: 6) {
+                VStack(spacing: 4) {
                     Button("History") {
                         openHistory()
                         dismiss()
@@ -121,7 +121,7 @@ struct ContentView: View {
 
                 }
 
-                VStack(spacing: 6) {
+                VStack(spacing: 4) {
                     Button("Clear") {
                         clearClipboard()
                     }
@@ -133,7 +133,7 @@ struct ContentView: View {
 
             }
             .padding(.horizontal, 16)
-            .padding(.vertical, 13)
+            .padding(.vertical, 10)
 
 
         }

@@ -24,7 +24,11 @@ import AlinFoundation
 
 // MARK: - Configuration
 
-let heights: [CGFloat] = [172, 165, 158, 150]
+/// The icon check renders the popover at a set of heights to prove the symbols survive a
+/// squeeze. They are derived from the popover's own natural height - measured here at
+/// startup - so the four renders are the natural size and three progressively tighter ones.
+/// Hard-coding them went stale as soon as the popover was trimmed.
+let iconHeightOffsets: [CGFloat] = [0, -6, -12, -18]
 let contentWidth: CGFloat = 600
 /// A pixel counts as ink when its composited colour differs from the window backdrop by
 /// more than this summed |dR| + |dG| + |dB| (0...3). Contrast is used instead of raw
@@ -1183,6 +1187,19 @@ if (ProcessInfo.processInfo.environment["RENDER_CHECK_MODE"] ?? "full") == "cold
 VizTheme.useMaterialFallback = true
 
 try? fileManager.createDirectory(at: outputDirectory, withIntermediateDirectories: true)
+
+/// Natural popover height, measured the same way `CHECK popoverheight` does.
+let naturalPopoverHeight: CGFloat = {
+    let hosting = NSHostingView(rootView: HarnessRoot(updater: Updater(owner: "alienator88", repo: "Viz"), scheme: .dark)
+        .frame(width: contentWidth))
+    hosting.layoutSubtreeIfNeeded()
+    pumpRunLoop(0.4)
+    hosting.layoutSubtreeIfNeeded()
+    return hosting.fittingSize.height
+}()
+
+/// The four heights the icon check squeezes the popover to.
+let heights: [CGFloat] = iconHeightOffsets.map { (naturalPopoverHeight + $0).rounded() }
 
 let updater = Updater(owner: "alienator88", repo: "Viz")
 
