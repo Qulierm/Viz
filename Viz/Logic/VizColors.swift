@@ -28,10 +28,13 @@ enum VizTheme {
     /// It is used only as a translucent glass tint, so the Liquid Glass surfaces keep the
     /// app's classic dark blue-grey identity instead of being painted flat again.
     static let surface = Color(.displayP3, red: 49.0 / 255.0, green: 52.0 / 255.0, blue: 67.0 / 255.0, opacity: 1.0)
-    /// Stronger tint for full-window and popover roots.
-    static let surfaceTint = surface.opacity(0.40)
-    /// Lighter tint for cards, rows and panels, so the hierarchy stays readable.
-    static let cardTint = surface.opacity(0.22)
+    /// Tint for full-window and popover roots. Deliberately light: the system material and
+    /// the desktop have to show through, so the classic hue reads as a cast on the glass
+    /// rather than as a filled panel.
+    static let surfaceTint = surface.opacity(0.15)
+    /// Slightly stronger tint for cards, rows and panels, so they stay a step more defined
+    /// than the window they sit on without becoming opaque.
+    static let cardTint = surface.opacity(0.20)
     /// The original brand gradient, used by the popover and About titles.
     static let brandGradient = LinearGradient(colors: [.red, .purple, .blue], startPoint: .leading, endPoint: .trailing)
     /// Update indicator and copy confirmation.
