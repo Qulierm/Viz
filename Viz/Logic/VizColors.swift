@@ -35,8 +35,6 @@ enum VizTheme {
     /// Slightly stronger tint for cards, rows and panels, so they stay a step more defined
     /// than the window they sit on without becoming opaque.
     static let cardTint = surface.opacity(0.20)
-    /// The original brand gradient, used by the popover and About titles.
-    static let brandGradient = LinearGradient(colors: [.red, .purple, .blue], startPoint: .leading, endPoint: .trailing)
     /// Update indicator and copy confirmation.
     static let success = Color.green
     /// URLs, webcam selection and the About button.

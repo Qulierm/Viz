@@ -423,19 +423,17 @@ func measureIcons(updater: Updater) -> [IconMeasurement] {
             luminanceInkCount(result.rep, xRange: x0...x1, yRange: run)
         }
 
-        // The topmost run is the popover header ("V I Z"), which always renders. The run
-        // below it is the button's own top edge, and the widest run below that is the
-        // label. The icon band is what lies between the button edge and the label: when the
-        // symbol renders it fills that band with ink, and when it collapses the band keeps
-        // only the flat button surface, whose pixels all match the band median.
+        // The topmost run is the popover header (the two bubbles, which always render), and
+        // the widest run below it is the button labels. The icon band is everything between
+        // them: when the symbol renders it fills part of that band with ink, and when it
+        // collapses the band keeps only the flat button surface. Deriving the band from the
+        // header and the labels - rather than from a separate button-edge run - keeps this
+        // working now that the wordmark no longer produces a run of its own.
         let headerRun = runs.first ?? 0...0
         let below = runs.filter { $0.lowerBound > headerRun.upperBound }
         let labelRun = below.max { ink(of: $0) < ink(of: $1) }
-        let chromeRun = below.first { $0.upperBound < (labelRun?.lowerBound ?? Int.max) }
         let band: ClosedRange<Int>
-        if let labelRun, let chromeRun, chromeRun.upperBound + 1 < labelRun.lowerBound {
-            band = (chromeRun.upperBound + 1)...(labelRun.lowerBound - 1)
-        } else if let labelRun {
+        if let labelRun {
             band = (headerRun.upperBound + 1)...max(headerRun.upperBound + 1, labelRun.lowerBound - 1)
         } else {
             band = (headerRun.upperBound + 1)...(result.rep.pixelsHigh - 1)
@@ -445,7 +443,7 @@ func measureIcons(updater: Updater) -> [IconMeasurement] {
         if debugMode {
             print("  debug height \(Int(height)) scale=\(result.scale) bitmap=\(result.rep.pixelsWide)x\(result.rep.pixelsHigh) xband=\(x0)-\(x1)")
             print("  debug runs: \(runs.map { "\($0.lowerBound)-\($0.upperBound)[\(ink(of: $0))]" }.joined(separator: " "))")
-            print("  debug header=\(headerRun.lowerBound)-\(headerRun.upperBound) chrome=\(chromeRun.map { "\($0.lowerBound)-\($0.upperBound)" } ?? "none") label=\(labelRun.map { "\($0.lowerBound)-\($0.upperBound)" } ?? "none") band=\(band.lowerBound)-\(band.upperBound) ink=\(bandInk)")
+            print("  debug header=\(headerRun.lowerBound)-\(headerRun.upperBound) label=\(labelRun.map { "\($0.lowerBound)-\($0.upperBound)" } ?? "none") band=\(band.lowerBound)-\(band.upperBound) ink=\(bandInk)")
         }
 
         measurements.append(IconMeasurement(height: height, scale: result.scale, band: band, ink: bandInk, runs: runs, pngPath: result.url.path))

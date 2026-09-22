@@ -7,19 +7,9 @@ struct AboutView: View {
 
         VStack(spacing: 0) {
 
-            Image(nsImage: NSApp.applicationIconImage ?? NSImage())
-                .padding()
-
-            Text(Bundle.main.name)
-                .font(.title)
-                .bold()
-                .foregroundStyle(
-                    LinearGradient(
-                        colors: [.red, .purple, .blue],
-                        startPoint: .leading,
-                        endPoint: .trailing
-                    )
-                )
+            // No icon or app-name block: the About window keeps only the version, the
+            // repository link and the attribution, centred in the window.
+            Spacer()
 
             VStack(spacing: 0) {
                 Text("Version \(Bundle.main.version) (Build \(Bundle.main.buildVersion))")

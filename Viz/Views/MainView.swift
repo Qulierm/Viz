@@ -22,21 +22,8 @@ struct ContentView: View {
 
         VStack(alignment: .center, spacing: 0) {
 
+            // The header holds only the two bubbles now: the app carries no in-UI branding.
             HStack(alignment: .center, spacing: 10) {
-
-                Text("V I Z")
-                    .font(.system(size: 18, design: .rounded))
-                    .bold()
-                    .foregroundStyle(
-                        LinearGradient(
-                            colors: [.red, .purple, .blue],
-                            startPoint: .leading,
-                            endPoint: .trailing
-                        )
-                    )
-                    .shadow(color: .black.opacity(0.35), radius: 3, x: 0, y: 1)
-                    .padding(.leading, 5)
-
 
                 Spacer()
 
