@@ -152,8 +152,9 @@ struct SettingsView: View {
             .padding(.vertical, 6)
             .background {
                 if selectedTab == index {
-                    RoundedRectangle(cornerRadius: 10)
-                        .fill(Color.primary.opacity(0.12))
+                    // The selection is glass too, not a flat opacity fill.
+                    Color.clear
+                        .vizGlassSurface(cornerRadius: 10, tint: VizTheme.cardTint)
                 }
             }
             .foregroundStyle(selectedTab == index ? VizTheme.accent : Color.secondary)

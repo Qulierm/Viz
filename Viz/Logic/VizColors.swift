@@ -141,17 +141,29 @@ extension View {
             .contentShape(Circle())
     }
 
-    /// Capsule used for shortcut hints and small labels.
+    /// Capsule used for shortcut hints and small labels. Glass like every other surface:
+    /// a real capsule glass effect on macOS 26+, and the material-plus-border fallback
+    /// below it, so no part of the chrome is a bare material fill.
+    @ViewBuilder
     func vizPill() -> some View {
-        self
-            .fixedSize()
-            .padding(.horizontal, 6)
-            .padding(.vertical, 3)
-            .background(.ultraThinMaterial, in: Capsule())
-            .overlay(Capsule().strokeBorder(Color.primary.opacity(0.12), lineWidth: 1))
-            // Primary, not .secondary: the shortcut hints are meant to read as labels. That
-            // is white in the dark popover and black in light, so it stays readable in both.
-            .foregroundStyle(.primary)
+        if #available(macOS 26.0, *), !VizTheme.useMaterialFallback {
+            self
+                .fixedSize()
+                .padding(.horizontal, 6)
+                .padding(.vertical, 3)
+                .background { Color.clear.glassEffect(.regular, in: .capsule) }
+                // Primary, not .secondary: the shortcut hints are meant to read as labels.
+                // That is white in the dark popover and black in light, so it stays legible.
+                .foregroundStyle(.primary)
+        } else {
+            self
+                .fixedSize()
+                .padding(.horizontal, 6)
+                .padding(.vertical, 3)
+                .background(.ultraThinMaterial, in: Capsule())
+                .overlay(Capsule().strokeBorder(Color.primary.opacity(0.12), lineWidth: 1))
+                .foregroundStyle(.primary)
+        }
     }
 }
 
