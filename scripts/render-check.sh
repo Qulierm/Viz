@@ -55,6 +55,14 @@ echo "==> Copying the application sources into the harness target"
 # VizApp.swift declares @main, which an executable target cannot have twice, and the
 # shortcut names it declares are reproduced in tools/render-check/ShortcutNames.swift.
 cp "$ROOT/Viz/Styles.swift" "$ROOT/Viz/Logic/"*.swift "$ROOT/Viz/Views/"*.swift "$WORK/Sources/RenderCheck/"
+
+# VizApp.swift carries the status item controller the statusmenu check drives. It is copied
+# with the '@main' attribute stripped, because an executable target cannot have two entry
+# points (the harness has its own main.swift).
+# The KeyboardShortcuts.Name extensions are dropped as well: the harness declares the same
+# names in tools/render-check/ShortcutNames.swift.
+sed -e 's/^@main$//' -e '/^extension KeyboardShortcuts.Name {$/,$d' \
+  "$ROOT/Viz/VizApp.swift" > "$WORK/Sources/RenderCheck/VizApp.swift"
 cp "$ROOT/tools/render-check/"*.swift "$WORK/Sources/RenderCheck/"
 echo "    $(ls "$WORK/Sources/RenderCheck" | wc -l | tr -d ' ') Swift files: $(ls "$WORK/Sources/RenderCheck" | tr '\n' ' ')"
 

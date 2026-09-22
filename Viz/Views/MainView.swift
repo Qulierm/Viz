@@ -14,6 +14,13 @@ struct ContentView: View {
     @EnvironmentObject var appState: AppState
     @EnvironmentObject var historyState: HistoryState
     @Environment(\.dismiss) private var dismiss
+
+    /// Closes whatever presents the popover: the status item's popover now that the app
+    /// owns the menu bar item, plus SwiftUI's dismiss for any other presentation.
+    private func dismissPopover() {
+        StatusItemController.shared.closePopover()
+        dismiss()
+    }
     @EnvironmentObject var updater: Updater
     @State private var windowController = WindowManager.shared
 
@@ -22,48 +29,11 @@ struct ContentView: View {
 
         VStack(alignment: .center, spacing: 0) {
 
-            // The header holds only the two bubbles now: the app carries no in-UI branding.
-            HStack(alignment: .center, spacing: 10) {
-
-                Spacer()
-
-                HStack() {
-
-                    Button {
-                        openAppSettings(selectedTab: updater.updateAvailable ? 2 : 0)
-                        dismiss()
-                    } label: {
-                        Image(systemName: updater.updateAvailable ? "arrow.down.circle" : "gear")
-                            .font(.system(size: 17))
-                            .vizGlassBubble(tint: updater.updateAvailable ? VizTheme.success.opacity(0.35) : nil)
-                    }
-                    .buttonStyle(.plain)
-                    .foregroundStyle(updater.updateAvailable ? VizTheme.success : .secondary)
-
-                    Button {
-                        NSApp.terminate(nil)
-                    } label: {
-                        Image(systemName: "x.circle.fill")
-                            .font(.system(size: 18))
-                            .vizGlassBubble()
-                    }
-                    .buttonStyle(.plain)
-                    .foregroundStyle(.secondary)
-                }
-                .padding(4)
-                .padding(.horizontal, 2)
-            }
-            .padding(5)
-            // The header keeps its height when the popover is squeezed: a tight popover must
-            // never swallow the title or make the settings/quit buttons unreachable.
-            .fixedSize(horizontal: false, vertical: true)
-
-
             HStack(spacing: 8) {
                 VStack(spacing: 4) {
                     Button("Capture") {
                         CaptureService.shared.captureContent()
-                        dismiss()
+                        dismissPopover()
                     }
                     .help("Capture section of screen to extract text and barcodes")
                     .buttonStyle(RoundedRectangleButtonStyle(image: "viewfinder", size: 15))
@@ -75,7 +45,7 @@ struct ContentView: View {
 
                 VStack(spacing: 4) {
                     Button("Webcam") {
-                        dismiss()
+                        dismissPopover()
                         openWebcamCapture()
                     }
                     .help("Open webcam capture window for OCR")
@@ -87,7 +57,7 @@ struct ContentView: View {
 
                 VStack(spacing: 4) {
                     Button("Color") {
-                        dismiss()
+                        dismissPopover()
                         processColor()
                     }
                     .help("Capture hex/rgb value from click location")
@@ -99,7 +69,7 @@ struct ContentView: View {
                 VStack(spacing: 4) {
                     Button("History") {
                         openHistory()
-                        dismiss()
+                        dismissPopover()
                     }
                     .help("Show history of captures from this session")
                     .buttonStyle(RoundedRectangleButtonStyle(image: "clock", size: 15))
