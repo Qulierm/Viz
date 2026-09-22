@@ -857,17 +857,24 @@ func designMetrics(_ rep: NSBitmapImageRep, backdrop: NSColor) -> DesignMetrics 
                          legacyShare: Double(legacyPixels) / Double(total))
 }
 
-func renderSurface(_ surface: AppSurface, scheme: ColorScheme) -> (rep: NSBitmapImageRep, url: URL)? {
+func renderSurface(_ surface: AppSurface, scheme: ColorScheme,
+                   updateAvailable: Bool? = nil, nameSuffix: String = "") -> (rep: NSBitmapImageRep, url: URL)? {
     // The settings check runs before this one and selects the Shortcuts tab, but the design
     // render should show the tab a user sees first (General), which is also where the
     // accent-tinted controls live.
     if surface == .settings {
         UserDefaults.standard.set(0, forKey: "settingsSelectedTab")
     }
+    // The update-available state is set explicitly rather than inherited from the live
+    // GitHub API: upstream's latest release equals this app's version, so a network-driven
+    // render would make the green bubble - and the `success` metric - non-deterministic.
+    if surface == .popover, let updateAvailable {
+        AppServices.shared.updater.updateAvailable = updateAvailable
+    }
     let size = surface.size
     let root = SurfaceRoot(surface: surface, scheme: scheme)
         .frame(width: size.width, height: size.height)
-    let name = "design-\(surface.rawValue)-\(scheme == .dark ? "dark" : "light").png"
+    let name = "design-\(surface.rawValue)-\(scheme == .dark ? "dark" : "light")\(nameSuffix).png"
     guard let rep = renderView(root, size: size, scheme: scheme, pngName: name) else { return nil }
     return (rep, outputDirectory.appendingPathComponent(name))
 }
@@ -1080,7 +1087,10 @@ func checkDesign() -> (passed: Bool, details: String) {
     for surface in AppSurface.allCases {
         for scheme in [ColorScheme.light, .dark] {
             let label = "\(surface.rawValue)-\(scheme == .dark ? "dark" : "light")"
-            guard let rendered = renderSurface(surface, scheme: scheme) else {
+            // The popover is rendered with an update available, which is the state the
+            // `success` metric asserts; the neutral state is rendered and asserted below.
+            guard let rendered = renderSurface(surface, scheme: scheme,
+                                               updateAvailable: surface == .popover ? true : nil) else {
                 failures.append("\(label):render")
                 summaries.append("\(label) RENDER-FAILED")
                 continue
@@ -1167,6 +1177,22 @@ func checkDesign() -> (passed: Bool, details: String) {
                 print("  debug design \(label) \(rendered.url.path)")
             }
         }
+    }
+
+
+    // The neutral case: with no update available the bubble must not be green, so the
+    // `success` metric cannot pass vacuously. This render is explicit too, so both states
+    // are deterministic.
+    if let neutral = renderSurface(.popover, scheme: .dark, updateAvailable: false, nameSuffix: "-neutral"),
+       let neutralURL = Optional(outputDirectory.appendingPathComponent("design-popover-dark-neutral.png")) {
+        let greenOff = successPixelCount(neutral.rep, backdrop: Backdrop.dark)
+        summaries.append("popover-neutral success-off=\(greenOff) (\(neutralURL.lastPathComponent))")
+        if greenOff >= successPixelMinimum {
+            failures.append("popover-neutral:success green=\(greenOff) should be below \(successPixelMinimum) with no update available")
+        }
+    } else {
+        failures.append("popover-neutral:render")
+        summaries.append("popover-neutral RENDER-FAILED")
     }
 
     let details = summaries.joined(separator: " | ") + (failures.isEmpty ? "" : " -> failed: \(failures.joined(separator: ", "))")
