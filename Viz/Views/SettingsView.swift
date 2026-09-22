@@ -26,7 +26,7 @@ struct SettingsView: View {
     @AppStorage("settingsSelectedTab") private var selectedTab: Int = 0
 
     /// Width that fits the widest tab (the Updates tab needs about 686 pt).
-    static let windowWidth: CGFloat = 520
+    static let windowWidth: CGFloat = 560
     /// Floor for the window content, used when the screen cannot fit a whole tab.
     static let minimumContentHeight: CGFloat = 380
     static let minimumContentWidth: CGFloat = 480
@@ -59,9 +59,6 @@ struct SettingsView: View {
                     }
             }
         }
-        // The window carries the classic Viz surface as a translucent tint, and the
-        // sections inside sit a step lighter.
-        .vizGlassSurface(cornerRadius: 0, tint: VizTheme.surfaceTint)
         // The minimum keeps the layout usable on a screen that cannot fit the whole tab;
         // the window is then clamped and this scrolls instead of clipping.
         .frame(minWidth: Self.minimumContentWidth, minHeight: Self.minimumContentHeight)
@@ -190,19 +187,23 @@ struct SettingsView: View {
 }
 
 /// A titled group of settings rows: a semibold heading above a glass panel.
+/// A section is a small grey label over its rows. The rows sit directly on the window's
+/// own material - there is no card around them, so the list stays flat instead of nesting
+/// one surface inside another.
 struct SettingsSection<Content: View>: View {
     let title: String
     @ViewBuilder let content: () -> Content
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
+        VStack(alignment: .leading, spacing: 2) {
             Text(title)
-                .font(.system(size: 13, weight: .semibold))
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(.secondary)
                 .padding(.leading, 4)
+                .padding(.bottom, 2)
             VStack(spacing: 0) {
                 content()
             }
-            .vizGlassSurface(cornerRadius: 14, tint: VizTheme.cardTint)
         }
     }
 }
@@ -211,10 +212,18 @@ struct SettingsSection<Content: View>: View {
 struct SettingsRow<Control: View>: View {
     let title: String
     var subtitle: String? = nil
+    /// SF Symbol shown in the accent colour before the title, like a sidebar glyph.
+    var icon: String? = nil
     @ViewBuilder let control: () -> Control
 
     var body: some View {
-        HStack(alignment: .center, spacing: 12) {
+        HStack(alignment: .center, spacing: 10) {
+            if let icon {
+                Image(systemName: icon)
+                    .font(.system(size: 15))
+                    .foregroundStyle(VizTheme.accent)
+                    .frame(width: 20, alignment: .center)
+            }
             VStack(alignment: .leading, spacing: 2) {
                 Text(title)
                     .font(.system(size: 13))
@@ -294,12 +303,12 @@ struct GeneralSettingsView: View {
 
     private var recognitionSection: some View {
         SettingsSection(title: "Recognition") {
-            SettingsRow(title: "OCR Language", subtitle: "Language used for text recognition") {
+            SettingsRow(title: "OCR Language", subtitle: "Language used for text recognition", icon: "globe") {
                 LanguagePickerView()
                     .frame(width: 200)
             }
             SettingsRowDivider()
-            SettingsRow(title: "OCR Quality", subtitle: "Fast is quicker, Accurate is more precise") {
+            SettingsRow(title: "OCR Quality", subtitle: "Fast is quicker, Accurate is more precise", icon: "textformat") {
                 QualityPickerView()
                     .frame(width: 200)
             }
@@ -308,21 +317,21 @@ struct GeneralSettingsView: View {
 
     private var capturesSection: some View {
         SettingsSection(title: "Captures") {
-            SettingsRow(title: "Append consecutive captures", subtitle: "New captures are added to the previous text") {
+            SettingsRow(title: "Append consecutive captures", subtitle: "New captures are added to the previous text", icon: "square.stack") {
                 Toggle("", isOn: $appendRecognizedText)
                     .toggleStyle(.switch)
                     .labelsHidden()
                     .help("When enabled, consecutive captures will be added on to the previous capture")
             }
             SettingsRowDivider()
-            SettingsRow(title: "Keep line breaks", subtitle: "Preserve the original line structure") {
+            SettingsRow(title: "Keep line breaks", subtitle: "Preserve the original line structure", icon: "text.alignleft") {
                 Toggle("", isOn: $keepLineBreaks)
                     .toggleStyle(.switch)
                     .labelsHidden()
                     .help("New lines will be kept from scanned text")
             }
             SettingsRowDivider()
-            SettingsRow(title: "Show capture window", subtitle: "The preview appears and hides automatically") {
+            SettingsRow(title: "Show capture window", subtitle: "The preview appears and hides automatically", icon: "macwindow") {
                 HStack(spacing: 8) {
                     Picker("", selection: $seconds) {
                         Text("3s").tag(3.0)
@@ -342,7 +351,7 @@ struct GeneralSettingsView: View {
                 }
             }
             SettingsRowDivider()
-            SettingsRow(title: "Mute capture sound", subtitle: "Silence the capture chime") {
+            SettingsRow(title: "Mute capture sound", subtitle: "Silence the capture chime", icon: "speaker.slash") {
                 Toggle("", isOn: $mute)
                     .toggleStyle(.switch)
                     .labelsHidden()
@@ -353,7 +362,7 @@ struct GeneralSettingsView: View {
 
     private var postProcessingSection: some View {
         SettingsSection(title: "Post-processing") {
-            SettingsRow(title: "Post-processing", subtitle: "Run shell commands after each capture") {
+            SettingsRow(title: "Post-processing", subtitle: "Run shell commands after each capture", icon: "terminal") {
                 HStack(spacing: 8) {
                     PostProcessingEditor(postCommands: $postCommands)
                     Toggle("", isOn: $processingIsEnabled)
@@ -367,7 +376,7 @@ struct GeneralSettingsView: View {
 
     private var systemSection: some View {
         SettingsSection(title: "System") {
-            SettingsRow(title: "Launch at login", subtitle: "Start Viz when you log in") {
+            SettingsRow(title: "Launch at login", subtitle: "Start Viz when you log in", icon: "power") {
                 Toggle("", isOn: Binding(
                     get: { appState.isLaunchAtLoginEnabled },
                     set: { newValue in
@@ -381,7 +390,7 @@ struct GeneralSettingsView: View {
                 .labelsHidden()
             }
             SettingsRowDivider()
-            SettingsRow(title: "Capture window size", subtitle: "Width and height of the floating preview") {
+            SettingsRow(title: "Capture window size", subtitle: "Width and height of the floating preview", icon: "arrow.up.left.and.arrow.down.right") {
                 HStack(spacing: 8) {
                     Text("W:")
                     Stepper("\(Int(viewWidth))", value: $viewWidth, in: 200...1000, step: 10)
@@ -419,23 +428,23 @@ struct GeneralSettingsView: View {
 struct ShortcutsSettingsView: View {
     var body: some View {
         SettingsSection(title: "Shortcuts") {
-            SettingsRow(title: "Capture Content", subtitle: "Extract text from a screen selection") {
+            SettingsRow(title: "Capture Content", subtitle: "Extract text from a screen selection", icon: "viewfinder") {
                 KeyboardShortcuts.Recorder(for: .captureContent)
             }
             SettingsRowDivider()
-            SettingsRow(title: "Capture Webcam", subtitle: "Recognize content from the camera") {
+            SettingsRow(title: "Capture Webcam", subtitle: "Recognize content from the camera", icon: "camera") {
                 KeyboardShortcuts.Recorder(for: .captureWebcam)
             }
             SettingsRowDivider()
-            SettingsRow(title: "Color Picker", subtitle: "Copy the colour under the cursor") {
+            SettingsRow(title: "Color Picker", subtitle: "Copy the colour under the cursor", icon: "eyedropper") {
                 KeyboardShortcuts.Recorder(for: .eyedropper)
             }
             SettingsRowDivider()
-            SettingsRow(title: "History Window", subtitle: "Open the capture history") {
+            SettingsRow(title: "History Window", subtitle: "Open the capture history", icon: "clock") {
                 KeyboardShortcuts.Recorder(for: .history)
             }
             SettingsRowDivider()
-            SettingsRow(title: "Clear Clipboard", subtitle: "Clear the clipboard and stored captures") {
+            SettingsRow(title: "Clear Clipboard", subtitle: "Clear the clipboard and stored captures", icon: "trash") {
                 KeyboardShortcuts.Recorder(for: .clear)
             }
         }
@@ -451,7 +460,7 @@ struct UpdaterSettingsView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: SettingsView.sectionSpacing) {
             SettingsSection(title: "Updates") {
-                SettingsRow(title: "Check for updates", subtitle: "How often Viz looks for a newer release") {
+                SettingsRow(title: "Check for updates", subtitle: "How often Viz looks for a newer release", icon: "arrow.down.circle") {
                     HStack(spacing: 8) {
                         FrequencyView(updater: updater)
                         if updater.updateAvailable {
