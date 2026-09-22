@@ -91,7 +91,6 @@ struct PreviewContentView: View {
         .padding(6)
         .vizGlassSurface(cornerRadius: VizTheme.cornerLarge, tint: VizTheme.cardTint)
         .foregroundColor(.primary)
-        .material(.sidebar)
     }
 }
 
@@ -129,7 +128,6 @@ struct ColorPreviewView: View {
         .padding(6)
         .vizGlassSurface(cornerRadius: VizTheme.cornerLarge, tint: VizTheme.cardTint)
         .foregroundColor(.primary)
-        .material(.sidebar)
     }
 }
 

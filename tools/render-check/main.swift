@@ -62,15 +62,12 @@ let surfaceCastMaximum: Double = 14
 /// over a bright one. A translucent surface follows its backdrop (the deltas measured here
 /// are in the hundreds); an opaque surface renders identically and gives 0.
 let translucencyDeltaMinimum: Double = 6
-/// Minimum pixels per hue window (red ~0, purple ~285, blue ~220 degrees) in the title band
-/// of the popover and about renders, proving the red-purple-blue brand gradient is back.
-let brandHuePixelMinimum = 40
 /// Minimum green pixels (hue within 30 degrees of 120) in the dark popover render, which is
 /// the update-available bubble.
 let successPixelMinimum = 40
-/// Ceiling for the popover's natural height. The popover measures 145 pt after the second
-/// padding trim (it was 161 pt, and 177 pt before that), so this catches a regression back
-/// to either taller layout.
+/// Ceiling for the popover's natural height: the measured value plus a 10 pt margin. The
+/// popover measures 145 pt after the branding removal and the two padding trims (161 and
+/// 177 pt before those), so this catches a regression back to a taller layout.
 let popoverHeightCeiling: CGFloat = 155
 /// Minimum number of bright pixels in the shortcut-pill band of the dark popover render.
 /// The hints are drawn in the primary label colour (white in dark), which yields ~800 such
@@ -604,7 +601,7 @@ func checkTranslucency() -> (passed: Bool, details: String) {
     var failures: [String] = []
     var summaries: [String] = []
 
-    for surface in [AppSurface.popover, AppSurface.settings] {
+    for surface in AppSurface.allCases {
         let size = surface.size
         // The backdrop is part of the rendered hierarchy: a material samples what is behind
         // it inside the same view tree, so a colour placed here is what the surface blurs.
@@ -1036,40 +1033,6 @@ func dominantSurfaceColor(_ rep: NSBitmapImageRep, backdrop: NSColor) -> (r: Dou
     return (best.r, best.g, best.b, (best.b - best.r) * 255)
 }
 
-/// Counts pixels in a band whose hue falls in one of the brand windows: red around 0,
-/// purple around 285 and blue around 220 degrees.
-func brandHueCounts(_ rep: NSBitmapImageRep, backdrop: NSColor, bandShare: Double = 0.30) -> (red: Int, purple: Int, blue: Int) {
-    let bandHeight = max(1, Int(Double(rep.pixelsHigh) * bandShare))
-    var red = 0
-    var purple = 0
-    var blue = 0
-    for y in 0..<bandHeight {
-        for x in 0..<rep.pixelsWide {
-            guard let color = rep.colorAt(x: x, y: y)?.usingColorSpace(.deviceRGB) else { continue }
-            let alpha = color.alphaComponent
-            guard alpha > 0.2 else { continue }
-            let base = backdrop.usingColorSpace(.deviceRGB) ?? .black
-            let composited = NSColor(deviceRed: color.redComponent * alpha + base.redComponent * (1 - alpha),
-                                     green: color.greenComponent * alpha + base.greenComponent * (1 - alpha),
-                                     blue: color.blueComponent * alpha + base.blueComponent * (1 - alpha),
-                                     alpha: 1)
-            var hue: CGFloat = 0
-            var saturation: CGFloat = 0
-            var brightness: CGFloat = 0
-            composited.getHue(&hue, saturation: &saturation, brightness: &brightness, alpha: nil)
-            guard saturation > 0.35, brightness > 0.35 else { continue }
-            let degrees = Double(hue) * 360
-            func within(_ target: Double) -> Bool {
-                let delta = abs(degrees - target)
-                return min(delta, 360 - delta) <= 25
-            }
-            if within(0) { red += 1 }
-            if within(285) { purple += 1 }
-            if within(220) { blue += 1 }
-        }
-    }
-    return (red, purple, blue)
-}
 
 /// Counts green pixels (hue within 30 degrees of 120) in a render.
 func successPixelCount(_ rep: NSBitmapImageRep, backdrop: NSColor) -> Int {
@@ -1157,17 +1120,9 @@ func checkDesign() -> (passed: Bool, details: String) {
                 }
             }
 
-            // The brand gradient: the title band must contain red, purple and blue pixels.
-            if surface == .popover || surface == .about {
-                // The popover title sits in its header; the About title is further down,
-                // below the app icon, so that surface needs a taller band.
-                let hues = brandHueCounts(rendered.rep, backdrop: Backdrop.forScheme(scheme),
-                                          bandShare: surface == .about ? 0.55 : 0.30)
-                summaries[summaries.count - 1] += " brand=\(hues.red)/\(hues.purple)/\(hues.blue)"
-                if hues.red < brandHuePixelMinimum || hues.purple < brandHuePixelMinimum || hues.blue < brandHuePixelMinimum {
-                    failures.append("\(label):brand r=\(hues.red) p=\(hues.purple) b=\(hues.blue) (need \(brandHuePixelMinimum) each)")
-                }
-            }
+            // The `brand` assertion is retired: the wordmark and its gradient were removed
+            // from the interface. Its intent - that the design is intact - is carried by the
+            // per-surface `translucency` check below, which now covers every surface.
 
             // The update-available bubble must be green in the dark popover.
             if surface == .popover && scheme == .dark {
