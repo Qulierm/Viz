@@ -115,14 +115,13 @@ final class StatusItemController: NSObject {
         guard statusItem == nil else { return }
 
         let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
+        statusItem = item
+        updateStatusIcon(updateAvailable: updater.updateAvailable)
         if let button = item.button {
-            button.image = statusImage(updateAvailable: updater.updateAvailable)
-            button.image?.isTemplate = true
             button.target = self
             button.action = #selector(statusButtonClicked(_:))
             button.sendAction(on: actionMask)
         }
-        statusItem = item
 
         let popover = NSPopover()
         popover.behavior = .transient
@@ -138,14 +137,20 @@ final class StatusItemController: NSObject {
         updaterCancellable = updater.$updateAvailable
             .receive(on: RunLoop.main)
             .sink { [weak self] available in
-                self?.statusItem?.button?.image = self?.statusImage(updateAvailable: available)
-                self?.statusItem?.button?.image?.isTemplate = true
+                self?.updateStatusIcon(updateAvailable: available)
             }
     }
 
-    private func statusImage(updateAvailable: Bool) -> NSImage? {
-        NSImage(systemSymbolName: updateAvailable ? "arrow.down.circle" : "eye",
-                accessibilityDescription: "Viz")
+    /// The symbol currently installed on the status button. `NSImage.name()` is nil for
+    /// symbol images, so the controller keeps the name it used - which is also what the
+    /// harness asserts on.
+    private(set) var statusSymbolName: String = "eye"
+
+    private func updateStatusIcon(updateAvailable: Bool) {
+        statusSymbolName = updateAvailable ? "arrow.down.circle" : "eye"
+        let image = NSImage(systemSymbolName: statusSymbolName, accessibilityDescription: "Viz")
+        image?.isTemplate = true
+        statusItem?.button?.image = image
     }
 
     /// The right-click menu: settings and quit.
@@ -175,9 +180,15 @@ final class StatusItemController: NSObject {
         }
     }
 
+    /// When true the controller only records what it would present instead of presenting
+    /// it. The render harness sets this: `NSMenu.popUp` and `NSPopover.show` start real UI
+    /// tracking, which would block the harness process.
+    var recordsPresentationOnly = false
+
     func showMenu() {
-        guard let button = statusItem?.button, let menu else { return }
         lastPresentation = .menu
+        guard !recordsPresentationOnly else { return }
+        guard let button = statusItem?.button, let menu else { return }
         menu.popUp(positioning: nil,
                    at: NSPoint(x: 0, y: button.bounds.height + 4),
                    in: button)
@@ -189,12 +200,13 @@ final class StatusItemController: NSObject {
             popover.performClose(nil)
             lastPresentation = .none
         } else {
-            lastPresentation = .popover
             showPopover()
         }
     }
 
     private func showPopover() {
+        lastPresentation = .popover
+        guard !recordsPresentationOnly else { return }
         guard let button = statusItem?.button, let popover else { return }
         popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
         popover.contentViewController?.view.window?.makeKey()

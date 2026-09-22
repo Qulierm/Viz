@@ -62,19 +62,21 @@ let surfaceCastMaximum: Double = 14
 /// over a bright one. A translucent surface follows its backdrop (the deltas measured here
 /// are in the hundreds); an opaque surface renders identically and gives 0.
 let translucencyDeltaMinimum: Double = 6
-/// Minimum green pixels (hue within 30 degrees of 120) in the dark popover render, which is
-/// the update-available bubble.
-let successPixelMinimum = 40
 /// Ceiling for the popover's natural height: the measured value plus a 10 pt margin. The
-/// popover measures 145 pt after the branding removal and the two padding trims (161 and
-/// 177 pt before those), so this catches a regression back to a taller layout.
-let popoverHeightCeiling: CGFloat = 155
+/// popover measures 99 pt now that the settings/quit header moved into the status item's
+/// right-click menu (145 pt before that, 161 and 177 pt earlier), so this catches a
+/// regression back to any taller layout.
+let popoverHeightCeiling: CGFloat = 109
 /// Minimum number of bright pixels in the shortcut-pill band of the dark popover render.
 /// The hints are drawn in the primary label colour (white in dark), which yields ~800 such
 /// pixels; `.secondary` leaves the band almost dark, so this catches a return to grey.
 let hintBrightPixelMinimum = 150
 /// Luminance above which a pixel counts as bright hint text.
 let hintBrightLuminance = 200.0 / 255.0
+/// Size the settings design surface is rendered at: the window's own width (the rows gained
+/// a glyph column, which moved it from 520 to 560) and the General tab's fitted height.
+let settingsWindowWidth: CGFloat = 560
+let settingsSurfaceHeight: CGFloat = 700
 /// Compactness ceilings for the settings window: the layout is meant to stay a normal,
 /// small macOS window, so a regression back to the old 690x793 shape has to fail.
 let settingsWindowMaxWidth: CGFloat = 560
@@ -591,6 +593,77 @@ func hintBrightPixels(_ rep: NSBitmapImageRep, backdrop: NSColor, bandStart: Dou
     return bright
 }
 
+// --- status menu ------------------------------------------------------------
+
+/// The settings and quit actions live in the status item's right-click menu, so the harness
+/// asserts the wiring structurally: a status item with a button, an action that receives
+/// both mouse-up kinds, a menu with the expected items, and a status icon that follows the
+/// update state. Removing the menu or the wiring fails this check.
+func checkStatusMenu(updater: Updater) -> (passed: Bool, details: String) {
+    var failures: [String] = []
+    var summaries: [String] = []
+
+    let controller = StatusItemController.shared
+    controller.start(updater: updater)
+    // Drive the routing without opening real UI: `NSMenu.popUp` would start menu tracking
+    // and block this process.
+    controller.recordsPresentationOnly = true
+
+    guard let item = controller.statusItem, let button = item.button else {
+        return (false, "no status item or button")
+    }
+    summaries.append("item=\(item.length == NSStatusItem.variableLength ? "variableLength" : "fixed")")
+
+    if button.action == nil || button.target == nil {
+        failures.append("status item button has no action/target wired")
+    }
+    summaries.append("action=\(button.action.map(NSStringFromSelector) ?? "nil")")
+
+    let mask = controller.actionMask
+    if !mask.contains(.leftMouseUp) || !mask.contains(.rightMouseUp) {
+        failures.append("send-action mask does not cover both left and right mouse-up")
+    }
+    summaries.append("mask=\(mask.contains(.leftMouseUp) ? "left" : "-")+\(mask.contains(.rightMouseUp) ? "right" : "-")")
+
+    let titles = controller.menu?.items.map(\.title) ?? []
+    for expected in ["Settings…", "Quit"] where !titles.contains(expected) {
+        failures.append("menu is missing '\(expected)'")
+    }
+    summaries.append("menu=\(titles.filter { !$0.isEmpty }.joined(separator: "/"))")
+
+    // The click routing: a right click must present the menu, a left click the popover.
+    controller.handle(eventType: .rightMouseUp)
+    let afterRight = controller.lastPresentation
+    if afterRight != .menu {
+        failures.append("right click did not present the menu (got \(afterRight))")
+    }
+    controller.handle(eventType: .leftMouseUp)
+    let afterLeft = controller.lastPresentation
+    if afterLeft != .popover {
+        failures.append("left click did not open the popover (got \(afterLeft))")
+    }
+    summaries.append("clicks=right:\(afterRight)/left:\(afterLeft)")
+    controller.recordsPresentationOnly = false
+    controller.closePopover()
+
+    // The status icon carries the update state now that the popover header is gone.
+    let previous = updater.updateAvailable
+    updater.updateAvailable = true
+    pumpRunLoop(0.2)
+    let updatedIcon = controller.statusSymbolName
+    updater.updateAvailable = false
+    pumpRunLoop(0.2)
+    let idleIcon = controller.statusSymbolName
+    updater.updateAvailable = previous
+    if updatedIcon != "arrow.down.circle" || idleIcon != "eye" {
+        failures.append("status icon does not follow the update state (got \(updatedIcon ?? "nil")/\(idleIcon ?? "nil"))")
+    }
+    summaries.append("icon=\(updatedIcon ?? "nil")/\(idleIcon ?? "nil")")
+
+    let details = summaries.joined(separator: " ") + (failures.isEmpty ? "" : " -> failed: \(failures.joined(separator: ", "))")
+    return (failures.isEmpty, details)
+}
+
 // --- translucency ----------------------------------------------------------
 
 /// Renders the same surface over two different backdrops and compares the surface colour:
@@ -746,8 +819,11 @@ enum AppSurface: String, CaseIterable {
 
     var size: NSSize {
         switch self {
-        case .popover: return NSSize(width: contentWidth, height: 172)
-        case .settings: return NSSize(width: 520, height: 700)   // the compact window, General tab
+        // The popover render uses the popover's own measured height: with the header gone
+        // the content is much shorter, and a taller frame would push the pills out of the
+        // band the hint-brightness metric looks at.
+        case .popover: return NSSize(width: contentWidth, height: naturalPopoverHeight.rounded())
+        case .settings: return NSSize(width: settingsWindowWidth, height: settingsSurfaceHeight)
         case .history: return NSSize(width: 500, height: 420)
         case .about: return NSSize(width: 400, height: 450)
         case .preview: return NSSize(width: 300, height: 200)
@@ -1041,32 +1117,6 @@ func dominantSurfaceColor(_ rep: NSBitmapImageRep, backdrop: NSColor) -> (r: Dou
 }
 
 
-/// Counts green pixels (hue within 30 degrees of 120) in a render.
-func successPixelCount(_ rep: NSBitmapImageRep, backdrop: NSColor) -> Int {
-    let base = backdrop.usingColorSpace(.deviceRGB) ?? .black
-    var count = 0
-    for y in 0..<rep.pixelsHigh {
-        for x in 0..<rep.pixelsWide {
-            guard let color = rep.colorAt(x: x, y: y)?.usingColorSpace(.deviceRGB) else { continue }
-            let alpha = color.alphaComponent
-            guard alpha > 0.2 else { continue }
-            let composited = NSColor(deviceRed: color.redComponent * alpha + base.redComponent * (1 - alpha),
-                                     green: color.greenComponent * alpha + base.greenComponent * (1 - alpha),
-                                     blue: color.blueComponent * alpha + base.blueComponent * (1 - alpha),
-                                     alpha: 1)
-            var hue: CGFloat = 0
-            var saturation: CGFloat = 0
-            var brightness: CGFloat = 0
-            composited.getHue(&hue, saturation: &saturation, brightness: &brightness, alpha: nil)
-            let degrees = Double(hue) * 360
-            let delta = abs(degrees - 120)
-            if min(delta, 360 - delta) <= 30 && saturation > 0.35 && brightness > 0.35 {
-                count += 1
-            }
-        }
-    }
-    return count
-}
 
 func checkDesign() -> (passed: Bool, details: String) {
     var failures: [String] = []
@@ -1134,14 +1184,11 @@ func checkDesign() -> (passed: Bool, details: String) {
             // from the interface. Its intent - that the design is intact - is carried by the
             // per-surface `translucency` check below, which now covers every surface.
 
-            // The update-available bubble must be green in the dark popover.
-            if surface == .popover && scheme == .dark {
-                let green = successPixelCount(rendered.rep, backdrop: Backdrop.forScheme(scheme))
-                summaries[summaries.count - 1] += " success=\(green)"
-                if green < successPixelMinimum {
-                    failures.append("\(label):success green=\(green) < \(successPixelMinimum)")
-                }
-            }
+            // The `success` metric is retired with the popover header: the green
+            // update-available bubble lived in that header, and the update indicator now
+            // lives in the menu bar icon whose state the `statusmenu` check asserts (a
+            // template image has no colour to measure). VizTheme.success is still used by
+            // the History copy confirmation.
 
             // The popover action buttons must stay neutral: the accent belongs to the title
             // gradient, the update indicator and the system-tinted controls only.
@@ -1180,20 +1227,6 @@ func checkDesign() -> (passed: Bool, details: String) {
     }
 
 
-    // The neutral case: with no update available the bubble must not be green, so the
-    // `success` metric cannot pass vacuously. This render is explicit too, so both states
-    // are deterministic.
-    if let neutral = renderSurface(.popover, scheme: .dark, updateAvailable: false, nameSuffix: "-neutral"),
-       let neutralURL = Optional(outputDirectory.appendingPathComponent("design-popover-dark-neutral.png")) {
-        let greenOff = successPixelCount(neutral.rep, backdrop: Backdrop.dark)
-        summaries.append("popover-neutral success-off=\(greenOff) (\(neutralURL.lastPathComponent))")
-        if greenOff >= successPixelMinimum {
-            failures.append("popover-neutral:success green=\(greenOff) should be below \(successPixelMinimum) with no update available")
-        }
-    } else {
-        failures.append("popover-neutral:render")
-        summaries.append("popover-neutral RENDER-FAILED")
-    }
 
     let details = summaries.joined(separator: " | ") + (failures.isEmpty ? "" : " -> failed: \(failures.joined(separator: ", "))")
     return (failures.isEmpty, details)
@@ -1282,23 +1315,27 @@ for measurement in measurements {
 let popoverHeight = checkPopoverHeight(updater: updater)
 report("popoverheight", popoverHeight.passed, popoverHeight.details)
 
-// 3. settings
+// 3. status menu
+let statusMenu = checkStatusMenu(updater: updater)
+report("statusmenu", statusMenu.passed, statusMenu.details)
+
+// 4. settings
 let settings = checkSettings()
 report("settings", settings.passed, settings.details)
 
-// 4. clipboard
+// 5. clipboard
 let clipboard = checkClipboard()
 report("clipboard", clipboard.passed, clipboard.details)
 
-// 5. window size
+// 6. window size
 let windowSize = checkWindowSize()
 report("windowsize", windowSize.passed, windowSize.details)
 
-// 6. translucency
+// 7. translucency
 let translucency = checkTranslucency()
 report("translucency", translucency.passed, translucency.details)
 
-// 7. design
+// 8. design
 let design = checkDesign()
 report("design", design.passed, design.details)
 for surface in AppSurface.allCases {
