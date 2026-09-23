@@ -74,6 +74,17 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
 
 
+/// The popover panel. It is borderless and non-activating, sits above normal windows and
+/// closes on Esc; `canBecomeKey` is true so it can receive the key press.
+final class MenuPanel: NSPanel {
+    override var canBecomeKey: Bool { true }
+    override var canBecomeMain: Bool { false }
+
+    override func cancelOperation(_ sender: Any?) {
+        orderOut(nil)
+    }
+}
+
 /// Owns the menu bar status item. A left click toggles a transient popover hosting the
 /// capture actions; a right click shows a menu with the settings and quit items. The app
 /// has to own the item itself because `MenuBarExtra` offers no way to tell which mouse
@@ -90,7 +101,10 @@ final class StatusItemController: NSObject {
     }
 
     private(set) var statusItem: NSStatusItem?
-    private(set) var popover: NSPopover?
+    /// The popover panel and the visual-effect view that draws its background with the
+    /// menu bar's own material.
+    private(set) var panel: MenuPanel?
+    private(set) var effectView: NSVisualEffectView?
     /// The menu shown on a right click.
     private(set) var menu: NSMenu?
     private(set) var lastPresentation: Presentation = .none
@@ -123,13 +137,16 @@ final class StatusItemController: NSObject {
             button.sendAction(on: actionMask)
         }
 
-        let popover = NSPopover()
-        popover.behavior = .transient
-        popover.animates = false
-        popover.contentViewController = NSHostingController(rootView: popoverContent)
         let measured = NSHostingView(rootView: popoverContent).fittingSize
-        popover.contentSize = NSSize(width: Self.popoverWidth, height: measured.height)
-        self.popover = popover
+        let size = NSSize(width: Self.popoverWidth, height: measured.height)
+        panel = makePanel(size: size)
+
+        // Click-away and app-switch dismissal; NSPopover's .transient behaviour used to
+        // provide this for free.
+        NotificationCenter.default.addObserver(self, selector: #selector(panelResignedKey),
+                                               name: NSWindow.didResignKeyNotification, object: panel)
+        NotificationCenter.default.addObserver(self, selector: #selector(panelResignedKey),
+                                               name: NSApplication.didResignActiveNotification, object: nil)
 
         menu = makeMenu()
 
@@ -195,28 +212,83 @@ final class StatusItemController: NSObject {
     }
 
     func togglePopover() {
-        guard let popover else { return }
-        if popover.isShown {
-            popover.performClose(nil)
-            lastPresentation = .none
+        guard let panel else { return }
+        if panel.isVisible {
+            closePopover()
         } else {
             showPopover()
         }
     }
 
+    /// The panel frame for a given content size, centred under the status button and
+    /// clamped so the panel stays inside the screen's visible frame.
+    func panelFrame(for size: NSSize) -> NSRect {
+        guard let button = statusItem?.button, let buttonWindow = button.window else {
+            return NSRect(origin: .zero, size: size)
+        }
+        let buttonFrame = buttonWindow.convertToScreen(button.convert(button.bounds, to: nil))
+        let screen = buttonWindow.screen ?? NSScreen.main
+        let visible = screen?.visibleFrame ?? buttonFrame
+        var origin = NSPoint(x: buttonFrame.midX - size.width / 2,
+                             y: buttonFrame.minY - size.height - 4)
+        origin.x = min(max(origin.x, visible.minX + 4), visible.maxX - size.width - 4)
+        origin.y = min(max(origin.y, visible.minY + 4), visible.maxY - size.height - 4)
+        return NSRect(origin: origin, size: size)
+    }
+
     private func showPopover() {
         lastPresentation = .popover
         guard !recordsPresentationOnly else { return }
-        guard let button = statusItem?.button, let popover else { return }
-        popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
-        popover.contentViewController?.view.window?.makeKey()
+        guard let panel else { return }
+        panel.setFrame(panelFrame(for: panel.frame.size), display: true)
+        panel.makeKeyAndOrderFront(nil)
     }
 
-    /// Closes the popover, used by the actions that used to dismiss the menu bar window.
+    /// Closes the panel, used by the actions that used to dismiss the menu bar window.
     func closePopover() {
-        guard let popover, popover.isShown else { return }
-        popover.performClose(nil)
+        guard let panel, panel.isVisible else { return }
+        panel.orderOut(nil)
         lastPresentation = .none
+    }
+
+    @objc private func panelResignedKey() {
+        closePopover()
+    }
+
+    /// Builds the borderless, non-activating panel and its menu-material background.
+    private func makePanel(size: NSSize) -> MenuPanel {
+        let panel = MenuPanel(contentRect: NSRect(origin: .zero, size: size),
+                              styleMask: [.borderless, .nonactivatingPanel],
+                              backing: .buffered,
+                              defer: false)
+        panel.isFloatingPanel = true
+        panel.level = .popUpMenu
+        panel.collectionBehavior = [.transient, .ignoresCycle]
+        panel.hidesOnDeactivate = true
+        panel.isOpaque = false
+        panel.backgroundColor = .clear
+        panel.hasShadow = true
+        panel.isReleasedWhenClosed = false
+
+        // The menu bar's own material, sampled from what is behind the window, so the
+        // popover merges with the menu bar and follows the wallpaper automatically.
+        let effect = NSVisualEffectView(frame: NSRect(origin: .zero, size: size))
+        effect.material = .menu
+        effect.blendingMode = .behindWindow
+        effect.state = .active
+        effect.wantsLayer = true
+        effect.layer?.cornerRadius = 12
+        effect.layer?.masksToBounds = true
+        effect.autoresizingMask = [.width, .height]
+
+        let hosting = NSHostingView(rootView: popoverContent)
+        hosting.frame = effect.bounds
+        hosting.autoresizingMask = [.width, .height]
+        effect.addSubview(hosting)
+
+        panel.contentView = effect
+        effectView = effect
+        return panel
     }
 
     static let popoverWidth: CGFloat = 600

@@ -94,9 +94,6 @@ struct ContentView: View {
 
 
         }
-        // The popover keeps the classic Viz surface as a translucent glass tint: the panel
-        // reads as the app's dark blue-grey while still sampling what is behind it.
-        .vizGlassSurface(cornerRadius: 0, tint: VizTheme.surfaceTint)
         .frame(width: 600)
     }
 }
