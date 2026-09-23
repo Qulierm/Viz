@@ -110,6 +110,26 @@ struct RoundedRectangleButtonStyle: ButtonStyle {
     @State private var isHovered = false
     let image: String
     let size: CGFloat
+
+    /// SF Symbols have different intrinsic proportions at the same point size - the camera
+    /// draws about 20 % wider than the viewfinder - so a single shared size makes the row
+    /// look uneven. These point sizes bring the five popover symbols to the same ink width
+    /// (measured at 2x: 31 device px each); anything not listed uses `size`.
+    private static let symbolPointSizes: [String: CGFloat] = [
+        "viewfinder": 16,
+        "camera": 13,
+        "eyedropper": 15,
+        "clock": 15.5,
+        "delete.left": 14.5
+    ]
+
+    /// The box every symbol is drawn in, so all five share one vertical centre and the
+    /// labels below them start at the same y.
+    private static let iconSlot = CGSize(width: 24, height: 18)
+
+    private var pointSize: CGFloat {
+        Self.symbolPointSizes[image] ?? size
+    }
     let color: Color?
     let shortcut: KeyboardShortcuts.Shortcut?
 
@@ -129,8 +149,8 @@ struct RoundedRectangleButtonStyle: ButtonStyle {
                     // thing a tight popover height squeezes on macOS 27, collapsing the icon
                     // to nothing while the labels survive. Font-based sizing keeps the symbol
                     // at its point size, and `.fixedSize()` makes the slot rigid.
-                    .font(.system(size: size))
-                    .frame(width: size, height: size)
+                    .font(.system(size: pointSize))
+                    .frame(width: Self.iconSlot.width, height: Self.iconSlot.height)
                     .fixedSize()
                     .foregroundStyle(.primary)
                 configuration.label
@@ -146,9 +166,12 @@ struct RoundedRectangleButtonStyle: ButtonStyle {
             Spacer()
         }
         // 12 pt rather than 16: the popover is 480 pt wide, and at 16 the five buttons'
-        // intrinsic width overflowed it and the outer buttons were clipped.
+        // intrinsic width overflowed it and the outer buttons were clipped. The vertical
+        // padding is asymmetric on purpose: the label's 13 pt line box reserves descender
+        // space below its ink, so the block needs one point less underneath to look centred.
         .padding(.horizontal, 12)
-        .padding(.vertical, 9)
+        .padding(.top, 8)
+        .padding(.bottom, 7)
         .vizGlassControl(cornerRadius: VizTheme.cornerMedium)
         .foregroundColor(.primary)
         .overlay(
