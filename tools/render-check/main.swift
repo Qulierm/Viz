@@ -59,6 +59,13 @@ let buttonAccentShareLimit = 0.015
 /// the high bound rejects flat paint.
 let surfaceCastMinimum: Double = 1
 let surfaceCastMaximum: Double = 14
+/// Alignment tolerances for the five popover buttons, in device pixels unless stated.
+/// Measured after the alignment pass: icon width spread 1 px, icon centres within 2 px of
+/// the row mean, label tops identical, ink balance within 2 pt.
+let alignmentIconWidthSpreadLimit = 4
+let alignmentIconCentreTolerance = 3
+let alignmentRowTolerance = 2
+let alignmentInkBalanceTolerance: Double = 3
 /// How far the popover content's dominant colour may differ from the harness backdrop it
 /// was composited over. The content is transparent over the panel's menu material, so the
 /// backdrop is what shows; a content-owned surface (the old tinted glass root) shifts it by
@@ -650,6 +657,169 @@ func hintBrightPixels(_ rep: NSBitmapImageRep, backdrop: NSColor, bandStart: Dou
         }
     }
     return bright
+}
+
+// --- alignment --------------------------------------------------------------
+
+/// The five popover buttons must look evenly laid out: same icon ink size, one icon row,
+/// one label row, aligned pills and an optically centred icon+label block. Measured from
+/// the popover render at the controller's width, segmenting each button column by its pill
+/// run (the bottom-most bright run) so the icon's own outline cannot split it.
+func checkAlignment() -> (passed: Bool, details: String) {
+    var failures: [String] = []
+    var summaries: [String] = []
+
+    let size = AppSurface.popover.size
+    let root = SurfaceRoot(surface: .popover, scheme: .dark)
+        .frame(width: size.width, height: size.height)
+    guard let rep = renderView(root, size: size, scheme: .dark, pngName: "alignment-popover-dark.png") else {
+        return (false, "render")
+    }
+
+    let scale = Double(rep.pixelsWide) / Double(size.width)
+    let rowPadding = 16.0
+    let buttonGap = 8.0
+    let buttonWidth = (Double(size.width) - 2 * rowPadding - 4 * buttonGap) / 5
+    let backdrop = Backdrop.dark.usingColorSpace(.deviceRGB) ?? .black
+
+    func differsFromBackdrop(_ x: Int, _ y: Int) -> Bool {
+        guard let c = rep.colorAt(x: x, y: y)?.usingColorSpace(.deviceRGB) else { return false }
+        return abs(c.redComponent - backdrop.redComponent) * 255 > 2
+            || abs(c.greenComponent - backdrop.greenComponent) * 255 > 2
+            || abs(c.blueComponent - backdrop.blueComponent) * 255 > 2
+    }
+
+    struct ButtonMeasure {
+        let index: Int
+        let centre: Double
+        let iconWidth: Int
+        let iconCentreX: Double
+        let iconCentreY: Double
+        let labelTop: Int
+        let pillCentre: Double
+        let inkAbove: Double
+        let inkBelow: Double
+    }
+    var measures: [ButtonMeasure] = []
+
+    for index in 0..<5 {
+        let left = rowPadding + Double(index) * (buttonWidth + buttonGap)
+        let centre = left + buttonWidth / 2
+        let x0 = Int(left * scale) + 2
+        let x1 = Int((left + buttonWidth) * scale) - 2
+
+        // Bright runs in the column.
+        var runs: [ClosedRange<Int>] = []
+        var start = -1, last = -1
+        for y in 0..<rep.pixelsHigh {
+            let bright = brightPixelCount(rep, xRange: x0...x1, yRange: y...y, brightness: 0.4) > 0
+            if bright {
+                if start < 0 { start = y } else if y - last > 4 { runs.append(start...last); start = y }
+                last = y
+            }
+        }
+        if start >= 0 { runs.append(start...last) }
+
+        let pillRun = runs.last ?? 0...0
+        let labelRun = runs.filter { $0.upperBound < pillRun.lowerBound }.last ?? 0...0
+        let above = runs.filter { $0.upperBound < labelRun.lowerBound }
+
+        // The pill's *horizontal* centre: the check compares it with the button's centre,
+        // the same axis as the icon centre.
+        var pillLeft = Int.max, pillRight = Int.min
+        for y in pillRun {
+            for x in x0...x1 where brightPixelCount(rep, xRange: x...x, yRange: y...y, brightness: 0.4) > 0 {
+                pillLeft = min(pillLeft, x); pillRight = max(pillRight, x)
+            }
+        }
+        let pillCentreX = pillLeft <= pillRight ? Double(pillLeft + pillRight) / 2 : 0
+
+        var iconTop = Int.max, iconBottom = Int.min, iconLeft = Int.max, iconRight = Int.min
+        for run in above {
+            for y in run {
+                for x in x0...x1 where brightPixelCount(rep, xRange: x...x, yRange: y...y, brightness: 0.4) > 0 {
+                    iconTop = min(iconTop, y); iconBottom = max(iconBottom, y)
+                    iconLeft = min(iconLeft, x); iconRight = max(iconRight, x)
+                }
+            }
+        }
+
+        // The button's own box, sampled in its left padding where the centred pill cannot
+        // reach, so the ink gaps are measured inside the button rather than the column.
+        let edgeColumn = Int((left + 4) * scale)
+        var boxTop = -1, boxBottom = -1
+        for y in 0..<rep.pixelsHigh where differsFromBackdrop(edgeColumn, y) {
+            if boxTop < 0 { boxTop = y }
+            boxBottom = y
+        }
+
+        if debugMode {
+            print("  debug alignment button \(index): runs=\(runs.map { "\($0.lowerBound)-\($0.upperBound)" }.joined(separator: " "))")
+        }
+        guard iconLeft <= iconRight, boxTop >= 0, !runs.isEmpty else {
+            failures.append("button \(index): no icon ink found")
+            continue
+        }
+        measures.append(ButtonMeasure(index: index,
+                                      centre: centre * scale,
+                                      iconWidth: iconRight - iconLeft + 1,
+                                      iconCentreX: Double(iconLeft + iconRight) / 2,
+                                      iconCentreY: Double(iconTop + iconBottom) / 2,
+                                      labelTop: labelRun.lowerBound,
+                                      pillCentre: pillCentreX,
+                                      inkAbove: (Double(iconTop) - Double(boxTop)) / scale,
+                                      inkBelow: (Double(boxBottom) - Double(labelRun.upperBound)) / scale))
+    }
+
+    guard measures.count == 5 else {
+        let details = summaries.joined(separator: " ") + " -> failed: \(failures.joined(separator: ", "))"
+        return (false, details)
+    }
+
+    var entries: [String] = []
+    func entry(_ name: String, _ ok: Bool, _ measured: String) {
+        entries.append("\(name):\(ok ? "ok" : "FAILED")(\(measured))")
+        if !ok {
+            failures.append("alignment '\(name)' out of tolerance: \(measured)")
+        }
+    }
+
+    let widths = measures.map(\.iconWidth)
+    let spread = (widths.max() ?? 0) - (widths.min() ?? 0)
+    entry("iconWidthSpread", spread <= alignmentIconWidthSpreadLimit,
+          "spread=\(spread)px widths=\(widths.map(String.init).joined(separator: "/")) limit=\(alignmentIconWidthSpreadLimit)")
+
+    let centreOffsets = measures.map { abs($0.iconCentreX - $0.centre) }
+    let worstCentre = centreOffsets.max() ?? 0
+    entry("iconCentres", worstCentre <= Double(alignmentIconCentreTolerance),
+          String(format: "worst=%.1fpx limit=%d", worstCentre, alignmentIconCentreTolerance))
+
+    let meanIconY = measures.map(\.iconCentreY).reduce(0, +) / 5
+    let worstIconY = measures.map { abs($0.iconCentreY - meanIconY) }.max() ?? 0
+    entry("iconRow", worstIconY <= Double(alignmentRowTolerance),
+          String(format: "meanY=%.1f worst=%.1fpx limit=%d", meanIconY, worstIconY, alignmentRowTolerance))
+
+    let meanLabelTop = Double(measures.map(\.labelTop).reduce(0, +)) / 5
+    let worstLabelTop = measures.map { abs(Double($0.labelTop) - meanLabelTop) }.max() ?? 0
+    entry("labelRow", worstLabelTop <= Double(alignmentRowTolerance),
+          String(format: "meanTop=%.1f worst=%.1fpx limit=%d", meanLabelTop, worstLabelTop, alignmentRowTolerance))
+
+    let balances = measures.map { abs($0.inkAbove - $0.inkBelow) }
+    let worstBalance = balances.max() ?? 0
+    let aboveList = measures.map { String(format: "%.1f", $0.inkAbove) }.joined(separator: "/")
+    let belowList = measures.map { String(format: "%.1f", $0.inkBelow) }.joined(separator: "/")
+    entry("inkBalance", worstBalance <= alignmentInkBalanceTolerance,
+          String(format: "worst=%.1fpt limit=%.0f", worstBalance, alignmentInkBalanceTolerance)
+          + " above=\(aboveList) below=\(belowList)")
+
+    let pillOffsets = measures.map { abs($0.pillCentre - $0.centre) }
+    let worstPill = pillOffsets.max() ?? 0
+    entry("pillRow", worstPill <= Double(alignmentRowTolerance),
+          String(format: "worst=%.1fpx limit=%d", worstPill, alignmentRowTolerance))
+
+    summaries.append(entries.joined(separator: " "))
+    let details = summaries.joined(separator: " ") + (failures.isEmpty ? "" : " -> failed: \(failures.joined(separator: ", "))")
+    return (failures.isEmpty, details)
 }
 
 // --- status menu ------------------------------------------------------------
@@ -1634,23 +1804,27 @@ report("statuspanel", statusPanel.passed, statusPanel.details)
 let popoverContent = checkPopoverContent()
 report("popovercontent", popoverContent.passed, popoverContent.details)
 
-// 6. settings
+// 6. alignment
+let alignment = checkAlignment()
+report("alignment", alignment.passed, alignment.details)
+
+// 7. settings
 let settings = checkSettings()
 report("settings", settings.passed, settings.details)
 
-// 7. clipboard
+// 8. clipboard
 let clipboard = checkClipboard()
 report("clipboard", clipboard.passed, clipboard.details)
 
-// 8. window size
+// 9. window size
 let windowSize = checkWindowSize()
 report("windowsize", windowSize.passed, windowSize.details)
 
-// 9. translucency
+// 10. translucency
 let translucency = checkTranslucency()
 report("translucency", translucency.passed, translucency.details)
 
-// 10. design
+// 11. design
 let design = checkDesign()
 report("design", design.passed, design.details)
 for surface in AppSurface.allCases {
