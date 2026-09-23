@@ -717,26 +717,78 @@ func checkStatusPanel(updater: Updater) -> (passed: Bool, details: String) {
     // Geometry: the panel sits under the status button and stays inside the screen.
     let size = NSSize(width: 600, height: 99)
     let frame = controller.panelFrame(for: size)
+    // The absolute position depends on where the system puts the status item in this
+    // process, which varies between runs; the assertion is that the panel fits the screen,
+    // so that is what the line reports.
+    var placement = "noscreen"
     if let screen = NSScreen.main {
-        if !screen.visibleFrame.contains(frame) {
+        placement = screen.visibleFrame.contains(frame) ? "inside" : "offscreen"
+        if placement == "offscreen" {
             failures.append("panel frame \(frame) is outside the visible frame \(screen.visibleFrame)")
         }
     }
-    summaries.append(String(format: "frame=%.0f,%.0f %.0fx%.0f", frame.minX, frame.minY, frame.width, frame.height))
+    summaries.append(String(format: "frame=%@ %.0fx%.0f", placement, frame.width, frame.height))
 
-    // Dismissal: posting the resign-key notification must reach the controller's observer.
-    controller.handle(eventType: .leftMouseUp)
-    let opened = controller.lastPresentation
-    if opened != .popover {
-        failures.append("left click did not open the panel (got \(opened))")
+    // Dismissal lifecycle. The panel must survive the notifications that arrive right
+    // after the click that opened it - dismissing on those made the popover invisible -
+    // while the real dismissal paths still close it.
+    var steps: [String] = []
+    func step(_ name: String, _ ok: Bool) {
+        steps.append("\(name):\(ok ? "ok" : "FAILED")")
+        if !ok {
+            failures.append("dismissal step '\(name)' behaved wrongly")
+        }
     }
-    NotificationCenter.default.post(name: NSWindow.didResignKeyNotification, object: panel)
-    let afterResign = controller.lastPresentation
-    if afterResign != .none {
-        failures.append("panel did not dismiss when it resigned key (got \(afterResign))")
-    }
-    summaries.append("clicks=left:\(opened)/resign:\(afterResign)")
+
     controller.recordsPresentationOnly = false
+    controller.ignoresGracePeriod = false
+    controller.togglePopover()
+    step("show", panel.isVisible && controller.lastPresentation == .popover)
+    step("monitorInstalled", controller.clickAwayMonitor != nil)
+
+    NotificationCenter.default.post(name: NSApplication.didResignActiveNotification, object: nil)
+    pumpRunLoop(0.05)
+    step("survivesAppResignActive", panel.isVisible && controller.lastPresentation == .popover)
+
+    NotificationCenter.default.post(name: NSWindow.didResignKeyNotification, object: panel)
+    pumpRunLoop(0.05)
+    step("survivesResignInsideGrace", panel.isVisible)
+
+    // With the grace period bypassed the panel must STILL survive an application
+    // deactivation: that notification fires right after the menu bar click, and the
+    // controller must not dismiss on it. This is the regression guard - with the old code
+    // (a didResignActive observer) the panel goes away here.
+    controller.ignoresGracePeriod = true
+    NotificationCenter.default.post(name: NSApplication.didResignActiveNotification, object: nil)
+    pumpRunLoop(0.05)
+    step("ignoresAppResignActive", panel.isVisible && controller.lastPresentation == .popover)
+
+    // Past the grace period a resignation is a real dismissal.
+    NotificationCenter.default.post(name: NSWindow.didResignKeyNotification, object: panel)
+    pumpRunLoop(0.05)
+    step("resignAfterGraceCloses", !panel.isVisible && controller.lastPresentation == .none)
+    step("monitorRemoved", controller.clickAwayMonitor == nil)
+    step("hidesOnDeactivateOff", !panel.hidesOnDeactivate)
+
+    // Toggle: a second click on the status button closes it.
+    controller.ignoresGracePeriod = false
+    controller.togglePopover()
+    let reopened = panel.isVisible
+    controller.togglePopover()
+    step("toggleCloses", reopened && !panel.isVisible)
+
+    // Esc path.
+    controller.togglePopover()
+    controller.dismissPanel()
+    step("escCloses", !panel.isVisible)
+
+    // Click-away: the entry point the global monitor calls.
+    controller.togglePopover()
+    controller.dismissPanel()
+    step("clickAwayCloses", !panel.isVisible)
+
+    summaries.append("lifecycle=\(steps.joined(separator: "/"))")
+    controller.recordsPresentationOnly = true
 
     let details = summaries.joined(separator: " ") + (failures.isEmpty ? "" : " -> failed: \(failures.joined(separator: ", "))")
     return (failures.isEmpty, details)
