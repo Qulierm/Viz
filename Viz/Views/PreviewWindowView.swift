@@ -31,11 +31,17 @@ struct PreviewContentView: View {
             HStack {
                 Spacer()
 
-                Button("Close") {
+                // The same round glass bubble the popover header used, so the preview's
+                // close control matches the app's other circular controls.
+                Button {
                     previewWindow?.orderOut(nil)
                     previewWindow = nil
+                } label: {
+                    Image(systemName: "x.circle.fill")
+                        .font(.system(size: 17))
                 }
-                .vizGlassButton()
+                .buttonStyle(.plain)
+                .vizGlassBubble()
                 .help("Close")
             }
             .padding(2)
@@ -103,11 +109,17 @@ struct ColorPreviewView: View {
             HStack {
                 Spacer()
 
-                Button("Close") {
+                // The same round glass bubble the popover header used, so the preview's
+                // close control matches the app's other circular controls.
+                Button {
                     previewWindow?.orderOut(nil)
                     previewWindow = nil
+                } label: {
+                    Image(systemName: "x.circle.fill")
+                        .font(.system(size: 17))
                 }
-                .vizGlassButton()
+                .buttonStyle(.plain)
+                .vizGlassBubble()
                 .help("Close")
             }
             .padding(2)
