@@ -59,6 +59,14 @@ let buttonAccentShareLimit = 0.015
 /// the high bound rejects flat paint.
 let surfaceCastMinimum: Double = 1
 let surfaceCastMaximum: Double = 14
+/// Minimum sum-of-channel difference (0...765) between the close control's centre and the
+/// panel background on the same rows: the glass bubble measures about 308, so this only
+/// catches a control that lost its surface entirely.
+let previewCloseSurfaceDeltaMinimum: Double = 30
+/// The preview window's close control must stay an icon-sized control: the word "Close" in
+/// a capsule measured 68 device px wide in the top strip, the cross-in-a-circle bubble
+/// measures 34 px, so this threshold sits between them.
+let previewCloseRunLimit = 45
 /// Alignment tolerances for the five popover buttons, in device pixels unless stated.
 /// Measured after the alignment pass: icon width spread 1 px, icon centres within 2 px of
 /// the row mean, label tops identical, ink balance within 2 pt.
@@ -818,6 +826,67 @@ func checkAlignment() -> (passed: Bool, details: String) {
           String(format: "worst=%.1fpx limit=%d", worstPill, alignmentRowTolerance))
 
     summaries.append(entries.joined(separator: " "))
+    let details = summaries.joined(separator: " ") + (failures.isEmpty ? "" : " -> failed: \(failures.joined(separator: ", "))")
+    return (failures.isEmpty, details)
+}
+
+// --- preview close control --------------------------------------------------
+
+/// The preview panel closes with the round glass bubble, not a text button, so the widest
+/// ink run in the top-right strip must stay icon-sized. Measured from the preview render at
+/// the app's preview size; no network and no real UI tracking involved.
+func checkPreviewClose() -> (passed: Bool, details: String) {
+    var failures: [String] = []
+    var summaries: [String] = []
+
+    let size = AppSurface.preview.size
+    let root = SurfaceRoot(surface: .preview, scheme: .dark)
+        .frame(width: size.width, height: size.height)
+    guard let rep = renderView(root, size: size, scheme: .dark, pngName: "previewclose-dark.png") else {
+        return (false, "render")
+    }
+
+    let scale = Double(rep.pixelsWide) / Double(size.width)
+    let stripHeight = Int(Double(rep.pixelsHigh) * 0.18)
+    let x0 = rep.pixelsWide / 2
+    var widest = 0
+    var band: ClosedRange<Int>?
+    for y in 0..<stripHeight {
+        var left = -1, right = -1
+        for x in x0..<rep.pixelsWide where brightPixelCount(rep, xRange: x...x, yRange: y...y, brightness: 0.4) > 0 {
+            if left < 0 { left = x }
+            right = x
+        }
+        guard left >= 0 else { continue }
+        if band == nil { band = y...y } else { band = band!.lowerBound...y }
+        widest = max(widest, right - left + 1)
+    }
+
+    summaries.append("widestRun=\(widest)px (limit \(previewCloseRunLimit), scale \(String(format: "%.1f", scale)))")
+    // The control must also have a surface of its own: sampled at its centre and compared
+    // with the panel background on the same rows. This proves a distinct control surface is
+    // there (it does not prove the surface is glass - the material fallback renders it flat).
+    if let band, widest > 0 {
+        let cy = (band.lowerBound + band.upperBound) / 2
+        let cx = rep.pixelsWide - Int(30 * scale)
+        let bubble = meanColor(rep, xRange: (cx - 6)...(cx + 6), yRange: (cy - 6)...(cy + 6))
+        let background = meanColor(rep, xRange: 20...32, yRange: (cy - 6)...(cy + 6))
+        if let bubble, let background {
+            let delta = (abs(bubble.r - background.r) + abs(bubble.g - background.g) + abs(bubble.b - background.b)) * 255
+            summaries.append(String(format: "surfaceDelta=%.0f (limit %.0f)", delta, previewCloseSurfaceDeltaMinimum))
+            if delta < previewCloseSurfaceDeltaMinimum {
+                failures.append(String(format: "preview close control has no surface of its own (centre differs from the panel background by %.0f, limit %.0f)", delta, previewCloseSurfaceDeltaMinimum))
+            }
+        } else {
+            failures.append("preview close control surface unmeasurable")
+        }
+    }
+    if widest == 0 {
+        failures.append("preview close control not found in the top strip")
+    } else if widest > previewCloseRunLimit {
+        failures.append("preview close control is \(widest) device px wide, above the icon-sized limit of \(previewCloseRunLimit) - it looks like a text button again")
+    }
+
     let details = summaries.joined(separator: " ") + (failures.isEmpty ? "" : " -> failed: \(failures.joined(separator: ", "))")
     return (failures.isEmpty, details)
 }
@@ -1808,23 +1877,27 @@ report("popovercontent", popoverContent.passed, popoverContent.details)
 let alignment = checkAlignment()
 report("alignment", alignment.passed, alignment.details)
 
-// 7. settings
+// 7. preview close control
+let previewClose = checkPreviewClose()
+report("previewclose", previewClose.passed, previewClose.details)
+
+// 8. settings
 let settings = checkSettings()
 report("settings", settings.passed, settings.details)
 
-// 8. clipboard
+// 9. clipboard
 let clipboard = checkClipboard()
 report("clipboard", clipboard.passed, clipboard.details)
 
-// 9. window size
+// 10. window size
 let windowSize = checkWindowSize()
 report("windowsize", windowSize.passed, windowSize.details)
 
-// 10. translucency
+// 11. translucency
 let translucency = checkTranslucency()
 report("translucency", translucency.passed, translucency.details)
 
-// 11. design
+// 12. design
 let design = checkDesign()
 report("design", design.passed, design.details)
 for surface in AppSurface.allCases {
