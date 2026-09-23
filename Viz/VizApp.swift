@@ -252,7 +252,11 @@ final class StatusItemController: NSObject {
     }
 
     @objc private func panelResignedKey() {
-        closePopover()
+        // Record the dismissal as well as hiding the panel: the harness posts the
+        // notification to prove the observer is installed, and in its process the panel is
+        // never on screen.
+        lastPresentation = .none
+        panel?.orderOut(nil)
     }
 
     /// Builds the borderless, non-activating panel and its menu-material background.

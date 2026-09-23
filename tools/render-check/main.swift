@@ -58,6 +58,11 @@ let buttonAccentShareLimit = 0.015
 /// the high bound rejects flat paint.
 let surfaceCastMinimum: Double = 1
 let surfaceCastMaximum: Double = 14
+/// How far the popover content's dominant colour may differ from the harness backdrop it
+/// was composited over. The content is transparent over the panel's menu material, so the
+/// backdrop is what shows; a content-owned surface (the old tinted glass root) shifts it by
+/// about 15 per channel.
+let popoverContentTolerance: Double = 3
 /// Minimum per-channel difference between the surface rendered over the dark backdrop and
 /// over a bright one. A translucent surface follows its backdrop (the deltas measured here
 /// are in the hundreds); an opaque surface renders identically and gives 0.
@@ -664,6 +669,116 @@ func checkStatusMenu(updater: Updater) -> (passed: Bool, details: String) {
     return (failures.isEmpty, details)
 }
 
+// --- status panel -----------------------------------------------------------
+
+/// The popover is our own panel now, so its background comes from an NSVisualEffectView
+/// with the menu bar's material. This asserts that arrangement structurally: the harness
+/// never shows real UI (`recordsPresentationOnly`).
+func checkStatusPanel(updater: Updater) -> (passed: Bool, details: String) {
+    var failures: [String] = []
+    var summaries: [String] = []
+
+    let controller = StatusItemController.shared
+    controller.start(updater: updater)
+    controller.recordsPresentationOnly = true
+
+    guard let panel = controller.panel else {
+        return (false, "no panel")
+    }
+    summaries.append("panel=\(Int(panel.frame.width))x\(Int(panel.frame.height))")
+
+    if !panel.styleMask.contains(.borderless) || !panel.styleMask.contains(.nonactivatingPanel) {
+        failures.append("panel is not borderless/non-activating (mask \(panel.styleMask.rawValue))")
+    }
+    if panel.isOpaque {
+        failures.append("panel is opaque")
+    }
+    if panel.level != .popUpMenu {
+        failures.append("panel level is \(panel.level.rawValue), expected the pop-up menu level")
+    }
+    summaries.append("level=\(panel.level.rawValue) opaque=\(panel.isOpaque)")
+
+    guard let effect = controller.effectView else {
+        failures.append("panel content is not an NSVisualEffectView")
+        let details = summaries.joined(separator: " ") + " -> failed: \(failures.joined(separator: ", "))"
+        return (failures.isEmpty, details)
+    }
+    if !(panel.contentView is NSVisualEffectView) {
+        failures.append("panel.contentView is not an NSVisualEffectView")
+    }
+    if effect.material != .menu {
+        failures.append("effect view material is \(effect.material.rawValue), expected .menu")
+    }
+    if effect.blendingMode != .behindWindow {
+        failures.append("effect view blending is \(effect.blendingMode.rawValue), expected .behindWindow")
+    }
+    summaries.append("material=\(effect.material == .menu ? "menu" : "\(effect.material.rawValue)") blending=\(effect.blendingMode == .behindWindow ? "behindWindow" : "\(effect.blendingMode.rawValue)") subviews=\(effect.subviews.count)")
+
+    // Geometry: the panel sits under the status button and stays inside the screen.
+    let size = NSSize(width: 600, height: 99)
+    let frame = controller.panelFrame(for: size)
+    if let screen = NSScreen.main {
+        if !screen.visibleFrame.contains(frame) {
+            failures.append("panel frame \(frame) is outside the visible frame \(screen.visibleFrame)")
+        }
+    }
+    summaries.append(String(format: "frame=%.0f,%.0f %.0fx%.0f", frame.minX, frame.minY, frame.width, frame.height))
+
+    // Dismissal: posting the resign-key notification must reach the controller's observer.
+    controller.handle(eventType: .leftMouseUp)
+    let opened = controller.lastPresentation
+    if opened != .popover {
+        failures.append("left click did not open the panel (got \(opened))")
+    }
+    NotificationCenter.default.post(name: NSWindow.didResignKeyNotification, object: panel)
+    let afterResign = controller.lastPresentation
+    if afterResign != .none {
+        failures.append("panel did not dismiss when it resigned key (got \(afterResign))")
+    }
+    summaries.append("clicks=left:\(opened)/resign:\(afterResign)")
+    controller.recordsPresentationOnly = false
+
+    let details = summaries.joined(separator: " ") + (failures.isEmpty ? "" : " -> failed: \(failures.joined(separator: ", "))")
+    return (failures.isEmpty, details)
+}
+
+/// The popover content must not paint a surface of its own: over each harness backdrop its
+/// dominant colour has to be that backdrop, so the panel's menu material is what shows.
+func checkPopoverContent() -> (passed: Bool, details: String) {
+    var failures: [String] = []
+    var summaries: [String] = []
+
+    for (scheme, backdrop) in [(ColorScheme.dark, Backdrop.dark), (ColorScheme.light, Backdrop.light)] {
+        let size = AppSurface.popover.size
+        let root = SurfaceRoot(surface: .popover, scheme: scheme)
+            .frame(width: size.width, height: size.height)
+        let name = "popovercontent-\(scheme == .dark ? "dark" : "light").png"
+        guard let rep = renderView(root, size: size, scheme: scheme, pngName: name),
+              let dominant = dominantSurfaceColor(rep, backdrop: backdrop) else {
+            failures.append("\(scheme == .dark ? "dark" : "light"):render")
+            summaries.append("\(scheme == .dark ? "dark" : "light") RENDER-FAILED")
+            continue
+        }
+        let base = backdrop.usingColorSpace(.deviceRGB) ?? .black
+        let deltas = [abs(dominant.r - Double(base.redComponent)) * 255,
+                      abs(dominant.g - Double(base.greenComponent)) * 255,
+                      abs(dominant.b - Double(base.blueComponent)) * 255]
+        let worst = deltas.max() ?? 0
+        summaries.append(String(format: "%@ dominant=%d,%d,%d backdrop=%d,%d,%d delta=%.0f/%.0f/%.0f",
+                                scheme == .dark ? "dark" : "light",
+                                Int(dominant.r * 255), Int(dominant.g * 255), Int(dominant.b * 255),
+                                Int(base.redComponent * 255), Int(base.greenComponent * 255), Int(base.blueComponent * 255),
+                                deltas[0], deltas[1], deltas[2]))
+        if worst > popoverContentTolerance {
+            failures.append(String(format: "%@ content paints its own surface (dominant differs from the backdrop by %.0f, tolerance %.0f)",
+                                    scheme == .dark ? "dark" : "light", worst, popoverContentTolerance))
+        }
+    }
+
+    let details = summaries.joined(separator: " | ") + (failures.isEmpty ? "" : " -> failed: \(failures.joined(separator: ", "))")
+    return (failures.isEmpty, details)
+}
+
 // --- translucency ----------------------------------------------------------
 
 /// Renders the same surface over two different backdrops and compares the surface colour:
@@ -674,7 +789,10 @@ func checkTranslucency() -> (passed: Bool, details: String) {
     var failures: [String] = []
     var summaries: [String] = []
 
-    for surface in AppSurface.allCases {
+    // The popover is excluded: its content is transparent over the panel's menu material,
+    // so there is no surface of its own to follow the backdrop. `checkPopoverContent`
+    // asserts that transparency instead.
+    for surface in AppSurface.allCases where surface != .popover {
         let size = surface.size
         // The backdrop is part of the rendered hierarchy: a material samples what is behind
         // it inside the same view tree, so a colour placed here is what the surface blurs.
@@ -1166,7 +1284,9 @@ func checkDesign() -> (passed: Bool, details: String) {
             // Viz blue-grey as a translucent tint. The cast (blue minus red) is the
             // discriminator: a neutral material gives 0 and the opaque colour gives ~28,
             // while the tinted surface measures 5-10.
-            if surface == .popover || surface == .settings {
+            // The popover has no surface of its own any more: the panel's menu material is
+            // its background, which `checkPopoverContent` asserts.
+            if surface == .settings {
                 if let dominant = dominantSurfaceColor(rendered.rep, backdrop: Backdrop.forScheme(scheme)) {
                     summaries[summaries.count - 1] += String(format: " surface=%d,%d,%d cast=%.0f",
                                                              Int(dominant.r * 255), Int(dominant.g * 255), Int(dominant.b * 255), dominant.cast)
@@ -1319,23 +1439,31 @@ report("popoverheight", popoverHeight.passed, popoverHeight.details)
 let statusMenu = checkStatusMenu(updater: updater)
 report("statusmenu", statusMenu.passed, statusMenu.details)
 
-// 4. settings
+// 4. status panel
+let statusPanel = checkStatusPanel(updater: updater)
+report("statuspanel", statusPanel.passed, statusPanel.details)
+
+// 5. popover content transparency
+let popoverContent = checkPopoverContent()
+report("popovercontent", popoverContent.passed, popoverContent.details)
+
+// 6. settings
 let settings = checkSettings()
 report("settings", settings.passed, settings.details)
 
-// 5. clipboard
+// 7. clipboard
 let clipboard = checkClipboard()
 report("clipboard", clipboard.passed, clipboard.details)
 
-// 6. window size
+// 8. window size
 let windowSize = checkWindowSize()
 report("windowsize", windowSize.passed, windowSize.details)
 
-// 7. translucency
+// 9. translucency
 let translucency = checkTranslucency()
 report("translucency", translucency.passed, translucency.details)
 
-// 8. design
+// 10. design
 let design = checkDesign()
 report("design", design.passed, design.details)
 for surface in AppSurface.allCases {
