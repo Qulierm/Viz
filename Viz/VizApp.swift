@@ -113,6 +113,21 @@ final class StatusItemController: NSObject {
     /// which then branches on `NSApp.currentEvent`.
     let actionMask: NSEvent.EventTypeMask = [.leftMouseUp, .rightMouseUp]
 
+    /// A non-activating panel can receive spurious resignations in the moment it is ordered
+    /// front - the click that opened it also deactivates the previously active app. A
+    /// resignation inside this window is therefore ignored; after it, a resignation means
+    /// the user moved on and closes the panel.
+    static let showGracePeriod: TimeInterval = 0.35
+    /// When the panel was last shown, used for the grace period.
+    private var shownAt: Date?
+    /// Click-away monitor, installed while the panel is shown.
+    private(set) var clickAwayMonitor: Any?
+    /// True once a monitor could not be installed, so the fallback is only logged once.
+    private var loggedMonitorFallback = false
+    /// Test hook: when set, the grace period is skipped so the harness can exercise the
+    /// dismissal paths without waiting.
+    var ignoresGracePeriod = false
+
     private var updaterCancellable: AnyCancellable?
 
     /// The popover content, kept in one place so its size and environment match the app.
@@ -141,12 +156,12 @@ final class StatusItemController: NSObject {
         let size = NSSize(width: Self.popoverWidth, height: measured.height)
         panel = makePanel(size: size)
 
-        // Click-away and app-switch dismissal; NSPopover's .transient behaviour used to
-        // provide this for free.
+        // Dismissal: a resignation after the grace period, a click outside (the global
+        // monitor below), Esc and the toggle. The application-deactivation notification is
+        // deliberately NOT observed: it fires immediately after the menu bar click that
+        // opened the panel, and dismissing on it made the popover invisible.
         NotificationCenter.default.addObserver(self, selector: #selector(panelResignedKey),
                                                name: NSWindow.didResignKeyNotification, object: panel)
-        NotificationCenter.default.addObserver(self, selector: #selector(panelResignedKey),
-                                               name: NSApplication.didResignActiveNotification, object: nil)
 
         menu = makeMenu()
 
@@ -238,25 +253,64 @@ final class StatusItemController: NSObject {
 
     private func showPopover() {
         lastPresentation = .popover
+        shownAt = Date()
         guard !recordsPresentationOnly else { return }
         guard let panel else { return }
         panel.setFrame(panelFrame(for: panel.frame.size), display: true)
         panel.makeKeyAndOrderFront(nil)
+        installClickAwayMonitor()
     }
 
     /// Closes the panel, used by the actions that used to dismiss the menu bar window.
     func closePopover() {
-        guard let panel, panel.isVisible else { return }
-        panel.orderOut(nil)
-        lastPresentation = .none
+        guard let panel, panel.isVisible else {
+            removeClickAwayMonitor()
+            return
+        }
+        dismissPanel()
     }
 
     @objc private func panelResignedKey() {
-        // Record the dismissal as well as hiding the panel: the harness posts the
-        // notification to prove the observer is installed, and in its process the panel is
-        // never on screen.
+        // Ignore resignations that arrive in the moment the panel is ordered front: the
+        // menu bar click deactivates the previously active app, which would otherwise hide
+        // the panel as soon as it appears.
+        if !ignoresGracePeriod, let shownAt, Date().timeIntervalSince(shownAt) < Self.showGracePeriod {
+            return
+        }
+        dismissPanel()
+    }
+
+    /// Hides the panel and records it. The harness calls this directly for the Esc and
+    /// click-away paths.
+    func dismissPanel() {
         lastPresentation = .none
         panel?.orderOut(nil)
+        removeClickAwayMonitor()
+    }
+
+    /// Click-away dismissal. A global monitor for mouse-down events needs no permissions and
+    /// does not depend on the panel being key, unlike the resign-key path.
+    private func installClickAwayMonitor() {
+        guard clickAwayMonitor == nil else { return }
+        clickAwayMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown, .otherMouseDown]) { [weak self] event in
+            guard let self, let panel = self.panel, panel.isVisible else { return }
+            if !panel.frame.contains(NSEvent.mouseLocation) {
+                self.dismissPanel()
+            }
+            _ = event
+        }
+        if clickAwayMonitor == nil, !loggedMonitorFallback {
+            loggedMonitorFallback = true
+            // Without the monitor the panel still closes on the post-grace resignation.
+            print("StatusItemController: no global mouse monitor available, relying on resign-key dismissal")
+        }
+    }
+
+    private func removeClickAwayMonitor() {
+        if let clickAwayMonitor {
+            NSEvent.removeMonitor(clickAwayMonitor)
+            self.clickAwayMonitor = nil
+        }
     }
 
     /// Builds the borderless, non-activating panel and its menu-material background.
@@ -268,7 +322,9 @@ final class StatusItemController: NSObject {
         panel.isFloatingPanel = true
         panel.level = .popUpMenu
         panel.collectionBehavior = [.transient, .ignoresCycle]
-        panel.hidesOnDeactivate = true
+        // AppKit would otherwise hide the panel on the deactivation that follows the menu
+        // bar click, independently of our own dismissal logic.
+        panel.hidesOnDeactivate = false
         panel.isOpaque = false
         panel.backgroundColor = .clear
         panel.hasShadow = true
