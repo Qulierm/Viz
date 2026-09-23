@@ -383,7 +383,7 @@ final class StatusItemController: NSObject {
         return panel
     }
 
-    static let popoverWidth: CGFloat = 600
+    static let popoverWidth: CGFloat = 480
 
     @objc private func openSettings() {
         closePopover()

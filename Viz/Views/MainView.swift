@@ -94,6 +94,8 @@ struct ContentView: View {
 
 
         }
-        .frame(width: 600)
+        // The popover width comes from the status item controller, so the panel and its
+        // content always agree on how wide the popover is.
+        .frame(width: StatusItemController.popoverWidth)
     }
 }

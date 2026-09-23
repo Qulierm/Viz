@@ -29,7 +29,8 @@ import AlinFoundation
 /// startup - so the four renders are the natural size and three progressively tighter ones.
 /// Hard-coding them went stale as soon as the popover was trimmed.
 let iconHeightOffsets: [CGFloat] = [0, -6, -12, -18]
-let contentWidth: CGFloat = 600
+/// The popover's width comes from the app itself, so every render measures the real thing.
+let contentWidth: CGFloat = StatusItemController.popoverWidth
 /// A pixel counts as ink when its composited colour differs from the window backdrop by
 /// more than this summed |dR| + |dG| + |dB| (0...3). Contrast is used instead of raw
 /// brightness because the redesign draws symbols in the blue accent (R+G+B ~= 326/765)
@@ -94,10 +95,14 @@ let tabStripMinimumRuns = 3
 let legacyShareLimit = 0.08
 /// Minimum share of non-backdrop pixels for a render to count as painted.
 let contentShareMinimum = 0.05
-/// The first action button spans x 16..125.6 pt in a 600 pt wide popover and its icon
+/// The first action button spans x 16..105 pt in a 480 pt wide popover and its icon
 /// is centred at about x 70.8 pt. The measured column band is given in points and
 /// scaled by the real bitmap scale, so it covers x 60..240 device pixels at 2x.
 let iconBandXRange: ClosedRange<CGFloat> = 30...120
+/// The column the symbol ink is counted in: the first button's centre, which excludes the
+/// button's rounded edge - its highlight is bright enough to be mistaken for a symbol at
+/// some popover heights.
+let iconMeasureXRange: ClosedRange<CGFloat> = 30...90
 
 let fileManager = FileManager.default
 let rootPath = fileManager.currentDirectoryPath
@@ -369,6 +374,42 @@ func inkProfile(_ result: RenderResult) -> [(row: Int, count: Int)] {
 
 /// Contiguous runs of ink rows; a run is a group of rows separated by at most
 /// `maxGap` empty rows.
+/// Bright pixels (luminance above the threshold) in a rectangle: the symbols, labels and
+/// pill text are drawn bright, the glass surfaces are not.
+func brightPixelCount(_ rep: NSBitmapImageRep, xRange: ClosedRange<Int>, yRange: ClosedRange<Int>,
+                      brightness: Double = 0.4) -> Int {
+    var count = 0
+    for y in yRange {
+        for x in xRange {
+            if let value = pixelLuminance(rep, x, y), value > brightness {
+                count += 1
+            }
+        }
+    }
+    return count
+}
+
+/// Rows that contain bright pixels (the symbols, labels and pill text) within the icon
+/// x-band. Anchoring the icon band on these is robust against the button's own edges, which
+/// make every row of the button block look like ink relative to the backdrop.
+func brightProfile(_ result: RenderResult, brightness: Double = 0.5) -> [(row: Int, count: Int)] {
+    let x0 = Int((iconBandXRange.lowerBound * result.scale).rounded())
+    let x1 = Int((iconBandXRange.upperBound * result.scale).rounded())
+    var profile: [(row: Int, count: Int)] = []
+    for y in 0..<result.rep.pixelsHigh {
+        var count = 0
+        for x in x0...x1 {
+            if let value = pixelLuminance(result.rep, x, y), value > brightness {
+                count += 1
+            }
+        }
+        if count > 0 {
+            profile.append((y, count))
+        }
+    }
+    return profile
+}
+
 func inkRuns(_ profile: [(row: Int, count: Int)], maxGap: Int = 4) -> [ClosedRange<Int>] {
     var runs: [ClosedRange<Int>] = []
     var start: Int?
@@ -427,27 +468,40 @@ func measureIcons(updater: Updater) -> [IconMeasurement] {
             luminanceInkCount(result.rep, xRange: x0...x1, yRange: run)
         }
 
-        // The topmost run is the popover header (the two bubbles, which always render), and
-        // the widest run below it is the button labels. The icon band is everything between
-        // them: when the symbol renders it fills part of that band with ink, and when it
-        // collapses the band keeps only the flat button surface. Deriving the band from the
-        // header and the labels - rather than from a separate button-edge run - keeps this
-        // working now that the wordmark no longer produces a run of its own.
-        let headerRun = runs.first ?? 0...0
-        let below = runs.filter { $0.lowerBound > headerRun.upperBound }
-        let labelRun = below.max { ink(of: $0) < ink(of: $1) }
+        // The band is anchored to the label row, found from the *bright* pixels rather than
+        // from gaps in the backdrop-relative ink profile: the button's own edge crosses every
+        // row of the button block, so at the narrower popover width the whole block reads as
+        // one run and there is no gap to split on. The symbol sits one button-spacing plus
+        // its own height above the label, which is the 25 pt band measured back from the top
+        // of the label run.
+        let brightRuns = inkRuns(brightProfile(result))
+        let labelRun = brightRuns.max { ink(of: $0) < ink(of: $1) }
+        // The symbol occupies exactly its own height (15 pt) starting one button-spacing
+        // (10 pt) above the label, so the band is that 15 pt window - sizing it to the
+        // symbol keeps the button's own edge, which is also ink, out of the measurement.
+        let symbolHeight = Int((15 * result.scale).rounded())
+        let symbolGap = Int((10 * result.scale).rounded())
         let band: ClosedRange<Int>
         if let labelRun {
-            band = (headerRun.upperBound + 1)...max(headerRun.upperBound + 1, labelRun.lowerBound - 1)
+            let upper = max(0, labelRun.lowerBound - symbolGap - 1)
+            let lower = max(0, upper - symbolHeight + 1)
+            band = lower...upper
         } else {
-            band = (headerRun.upperBound + 1)...(result.rep.pixelsHigh - 1)
+            band = 0...max(0, result.rep.pixelsHigh - 1)
         }
-        let bandInk = luminanceInkCount(result.rep, xRange: x0...x1, yRange: band)
+        // The band is measured in *bright* pixels rather than in ink-relative-to-median:
+        // when the symbol collapses the band falls back onto the button's own edge, whose
+        // highlight is ink by the median test but is nowhere near bright, and the check has
+        // to read that as "no symbol".
+        let mx0 = Int((iconMeasureXRange.lowerBound * result.scale).rounded())
+        let mx1 = Int((iconMeasureXRange.upperBound * result.scale).rounded())
+        let bandInk = brightPixelCount(result.rep, xRange: mx0...mx1, yRange: band)
 
         if debugMode {
             print("  debug height \(Int(height)) scale=\(result.scale) bitmap=\(result.rep.pixelsWide)x\(result.rep.pixelsHigh) xband=\(x0)-\(x1)")
             print("  debug runs: \(runs.map { "\($0.lowerBound)-\($0.upperBound)[\(ink(of: $0))]" }.joined(separator: " "))")
-            print("  debug header=\(headerRun.lowerBound)-\(headerRun.upperBound) label=\(labelRun.map { "\($0.lowerBound)-\($0.upperBound)" } ?? "none") band=\(band.lowerBound)-\(band.upperBound) ink=\(bandInk)")
+            print("  debug brightRuns: \(brightRuns.map { "\($0.lowerBound)-\($0.upperBound)[\(ink(of: $0))]" }.joined(separator: " "))")
+            print("  debug label=\(labelRun.map { "\($0.lowerBound)-\($0.upperBound)" } ?? "none") band=\(band.lowerBound)-\(band.upperBound) ink=\(bandInk) mx=\(mx0)-\(mx1)")
         }
 
         measurements.append(IconMeasurement(height: height, scale: result.scale, band: band, ink: bandInk, runs: runs, pngPath: result.url.path))
@@ -715,7 +769,7 @@ func checkStatusPanel(updater: Updater) -> (passed: Bool, details: String) {
     summaries.append("material=\(effect.material == .menu ? "menu" : "\(effect.material.rawValue)") blending=\(effect.blendingMode == .behindWindow ? "behindWindow" : "\(effect.blendingMode.rawValue)") subviews=\(effect.subviews.count)")
 
     // Geometry: the panel sits under the status button and stays inside the screen.
-    let size = NSSize(width: 600, height: 99)
+    let size = NSSize(width: StatusItemController.popoverWidth, height: 99)
     let frame = controller.panelFrame(for: size)
     // The absolute position depends on where the system puts the status item in this
     // process, which varies between runs; the assertion is that the panel fits the screen,
@@ -827,9 +881,25 @@ func checkPopoverContent() -> (passed: Bool, details: String) {
                                 Int(dominant.r * 255), Int(dominant.g * 255), Int(dominant.b * 255),
                                 Int(base.redComponent * 255), Int(base.greenComponent * 255), Int(base.blueComponent * 255),
                                 deltas[0], deltas[1], deltas[2]))
-        if worst > popoverContentTolerance {
-            failures.append(String(format: "%@ content paints its own surface (dominant differs from the backdrop by %.0f, tolerance %.0f)",
-                                    scheme == .dark ? "dark" : "light", worst, popoverContentTolerance))
+        _ = worst
+        // The dominant colour is only the backdrop while the controls cover less than half
+        // the surface, which stops being true at the narrower width. The padding corner is
+        // outside every control, so it is the reliable place to look for a content-owned
+        // background: it must be the backdrop and nothing else.
+        let corner = 16
+        if let sampled = meanColor(rep, xRange: 0...(corner - 1), yRange: 0...(corner - 1)) {
+            let cornerDeltas = [abs(sampled.r - Double(base.redComponent)) * 255,
+                                abs(sampled.g - Double(base.greenComponent)) * 255,
+                                abs(sampled.b - Double(base.blueComponent)) * 255]
+            let cornerWorst = cornerDeltas.max() ?? 0
+            summaries.append(String(format: "corner=%d,%d,%d cornerDelta=%.0f",
+                                    Int(sampled.r * 255), Int(sampled.g * 255), Int(sampled.b * 255), cornerWorst))
+            if cornerWorst > popoverContentTolerance {
+                failures.append(String(format: "%@ content paints its own surface (padding corner differs from the backdrop by %.0f, tolerance %.0f)",
+                                        scheme == .dark ? "dark" : "light", cornerWorst, popoverContentTolerance))
+            }
+        } else {
+            failures.append("\(scheme == .dark ? "dark" : "light"):corner unmeasurable")
         }
     }
 
@@ -1273,6 +1343,22 @@ func tabStripMetrics(_ rep: NSBitmapImageRep, backdrop: NSColor, rowGap: Int = 2
 /// The most frequent colour of a render, sampled on a coarse grid: the surface the view is
 /// painted on. Returns the RGB components in 0...1 and the blue-minus-red cast that tells
 /// the restored Viz surface apart from a neutral material and from the opaque colour.
+/// Mean colour of a rectangle of a render, used to sample the popover's padding corner.
+func meanColor(_ rep: NSBitmapImageRep, xRange: ClosedRange<Int>, yRange: ClosedRange<Int>) -> (r: Double, g: Double, b: Double)? {
+    var r = 0.0, g = 0.0, b = 0.0, count = 0.0
+    for y in yRange {
+        for x in xRange {
+            guard let color = rep.colorAt(x: x, y: y)?.usingColorSpace(.deviceRGB) else { continue }
+            r += Double(color.redComponent)
+            g += Double(color.greenComponent)
+            b += Double(color.blueComponent)
+            count += 1
+        }
+    }
+    guard count > 0 else { return nil }
+    return (r / count, g / count, b / count)
+}
+
 func dominantSurfaceColor(_ rep: NSBitmapImageRep, backdrop: NSColor) -> (r: Double, g: Double, b: Double, cast: Double)? {
     var counts: [String: (count: Int, r: Double, g: Double, b: Double)] = [:]
     for y in stride(from: 0, to: rep.pixelsHigh, by: 3) {

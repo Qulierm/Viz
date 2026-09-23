@@ -145,7 +145,9 @@ struct RoundedRectangleButtonStyle: ButtonStyle {
             }
             Spacer()
         }
-        .padding(.horizontal, 16)
+        // 12 pt rather than 16: the popover is 480 pt wide, and at 16 the five buttons'
+        // intrinsic width overflowed it and the outer buttons were clipped.
+        .padding(.horizontal, 12)
         .padding(.vertical, 9)
         .vizGlassControl(cornerRadius: VizTheme.cornerMedium)
         .foregroundColor(.primary)
