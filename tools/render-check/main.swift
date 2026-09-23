@@ -770,19 +770,25 @@ func checkStatusPanel(updater: Updater) -> (passed: Bool, details: String) {
     step("monitorRemoved", controller.clickAwayMonitor == nil)
     step("hidesOnDeactivateOff", !panel.hidesOnDeactivate)
 
-    // Toggle: a second click on the status button closes it.
+    // Toggle: a second click on the status button closes it. The reopen bypasses the toggle
+    // suppression window, because the step above dismissed the panel a moment ago and that
+    // window is exactly what stops the closing click from reopening it.
     controller.ignoresGracePeriod = false
+    controller.ignoresToggleSuppression = true
     controller.togglePopover()
     let reopened = panel.isVisible
+    controller.ignoresToggleSuppression = false
     controller.togglePopover()
     step("toggleCloses", reopened && !panel.isVisible)
 
     // Esc path.
+    pumpRunLoop(0.4)
     controller.togglePopover()
     controller.dismissPanel()
     step("escCloses", !panel.isVisible)
 
     // Click-away: the entry point the global monitor calls.
+    pumpRunLoop(0.4)
     controller.togglePopover()
     controller.dismissPanel()
     step("clickAwayCloses", !panel.isVisible)

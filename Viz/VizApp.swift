@@ -118,8 +118,14 @@ final class StatusItemController: NSObject {
     /// resignation inside this window is therefore ignored; after it, a resignation means
     /// the user moved on and closes the panel.
     static let showGracePeriod: TimeInterval = 0.35
+    /// The click that closes the panel is the same click that reaches the button action: the
+    /// panel resigns key first, we dismiss it, and the action would then reopen it. Do not
+    /// reopen inside this window - a later click opens the popover normally.
+    static let toggleSuppressionWindow: TimeInterval = 0.3
     /// When the panel was last shown, used for the grace period.
     private var shownAt: Date?
+    /// When the panel was last dismissed, used for the toggle suppression window.
+    private var lastDismissalAt: Date?
     /// Click-away monitor, installed while the panel is shown.
     private(set) var clickAwayMonitor: Any?
     /// True once a monitor could not be installed, so the fallback is only logged once.
@@ -127,6 +133,9 @@ final class StatusItemController: NSObject {
     /// Test hook: when set, the grace period is skipped so the harness can exercise the
     /// dismissal paths without waiting.
     var ignoresGracePeriod = false
+    /// Test hook: when set, the toggle suppression window is skipped so the harness can
+    /// assert that a later click reopens the popover.
+    var ignoresToggleSuppression = false
 
     private var updaterCancellable: AnyCancellable?
 
@@ -230,13 +239,33 @@ final class StatusItemController: NSObject {
         guard let panel else { return }
         if panel.isVisible {
             closePopover()
-        } else {
-            showPopover()
+            return
         }
+        // The click that closed the panel also reaches this action. Reopening here is what
+        // made a second click appear to do nothing, so a dismissal inside the suppression
+        // window means "this is that click" - do not reopen.
+        if !ignoresToggleSuppression, let lastDismissalAt,
+           Date().timeIntervalSince(lastDismissalAt) < Self.toggleSuppressionWindow {
+            return
+        }
+        showPopover()
     }
 
     /// The panel frame for a given content size, centred under the status button and
     /// clamped so the panel stays inside the screen's visible frame.
+    /// The status button's frame in screen coordinates, or nil when the item is not in a
+    /// window yet.
+    func statusButtonFrame() -> NSRect? {
+        guard let button = statusItem?.button, let buttonWindow = button.window else { return nil }
+        return buttonWindow.convertToScreen(button.convert(button.bounds, to: nil))
+    }
+
+    /// True when a screen point is on the status item. The click-away monitor uses this so
+    /// the click that belongs to the button action is not also treated as a click outside.
+    func isPointOnStatusButton(_ point: NSPoint) -> Bool {
+        statusButtonFrame()?.contains(point) ?? false
+    }
+
     func panelFrame(for size: NSSize) -> NSRect {
         guard let button = statusItem?.button, let buttonWindow = button.window else {
             return NSRect(origin: .zero, size: size)
@@ -284,6 +313,7 @@ final class StatusItemController: NSObject {
     /// click-away paths.
     func dismissPanel() {
         lastPresentation = .none
+        lastDismissalAt = Date()
         panel?.orderOut(nil)
         removeClickAwayMonitor()
     }
@@ -294,7 +324,9 @@ final class StatusItemController: NSObject {
         guard clickAwayMonitor == nil else { return }
         clickAwayMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown, .otherMouseDown]) { [weak self] event in
             guard let self, let panel = self.panel, panel.isVisible else { return }
-            if !panel.frame.contains(NSEvent.mouseLocation) {
+            let location = NSEvent.mouseLocation
+            // A click on the status item belongs to the button action, not to click-away.
+            if !panel.frame.contains(location) && !self.isPointOnStatusButton(location) {
                 self.dismissPanel()
             }
             _ = event
