@@ -824,9 +824,12 @@ func checkStatusPanel(updater: Updater) -> (passed: Bool, details: String) {
     step("monitorRemoved", controller.clickAwayMonitor == nil)
     step("hidesOnDeactivateOff", !panel.hidesOnDeactivate)
 
-    // Toggle: a second click on the status button closes it. The reopen bypasses the toggle
-    // suppression window, because the step above dismissed the panel a moment ago and that
-    // window is exactly what stops the closing click from reopening it.
+    // The click on the status button. A second click must CLOSE the panel: the click first
+    // makes the panel resign key (our dismissal runs), and the button action then runs
+    // `togglePopover()` - reopening there is exactly the bug where clicking the icon did
+    // nothing. The reopen below bypasses the suppression window, because the step above
+    // dismissed the panel a moment ago and that window is what stops the closing click from
+    // reopening it.
     controller.ignoresGracePeriod = false
     controller.ignoresToggleSuppression = true
     controller.togglePopover()
@@ -834,6 +837,46 @@ func checkStatusPanel(updater: Updater) -> (passed: Bool, details: String) {
     controller.ignoresToggleSuppression = false
     controller.togglePopover()
     step("toggleCloses", reopened && !panel.isVisible)
+
+    // `secondClickCloses`: the button action alone, with the panel shown, closes it.
+    pumpRunLoop(0.4)
+    controller.togglePopover()
+    let shownForClick = panel.isVisible
+    controller.handle(eventType: .leftMouseUp)
+    step("secondClickCloses", shownForClick && !panel.isVisible)
+
+    // `noReopenAfterClickDismissal`: the click's own resignation dismisses the panel, and
+    // the button action that follows must NOT reopen it.
+    pumpRunLoop(0.4)
+    controller.togglePopover()
+    let shownForResignation = panel.isVisible
+    controller.ignoresGracePeriod = true
+    NotificationCenter.default.post(name: NSWindow.didResignKeyNotification, object: panel)
+    pumpRunLoop(0.05)
+    let dismissedByClick = !panel.isVisible
+    controller.handle(eventType: .leftMouseUp)
+    pumpRunLoop(0.05)
+    step("noReopenAfterClickDismissal", shownForResignation && dismissedByClick && !panel.isVisible)
+    controller.ignoresGracePeriod = false
+
+    // `reopensAfterSuppressionWindow`: past the window the same action opens it again.
+    controller.ignoresToggleSuppression = true
+    controller.handle(eventType: .leftMouseUp)
+    let reopenedAfterWindow = panel.isVisible
+    controller.ignoresToggleSuppression = false
+    step("reopensAfterSuppressionWindow", reopenedAfterWindow)
+    controller.dismissPanel()
+    pumpRunLoop(0.4)
+
+    // `monitorIgnoresStatusButton`: a point on the status item is not a click-away.
+    if let buttonFrame = controller.statusButtonFrame() {
+        let onButton = NSPoint(x: buttonFrame.midX, y: buttonFrame.midY)
+        let farAway = NSPoint(x: buttonFrame.midX + 2000, y: buttonFrame.midY + 2000)
+        step("monitorIgnoresStatusButton",
+             controller.isPointOnStatusButton(onButton) && !controller.isPointOnStatusButton(farAway))
+    } else {
+        step("monitorIgnoresStatusButton", false)
+    }
 
     // Esc path.
     pumpRunLoop(0.4)
