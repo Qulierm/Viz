@@ -30,6 +30,14 @@ class AppState: ObservableObject {
     @Published var colorSample: ColorItem = ColorItem(hex: "", rgb: "")
     @AppStorage("selectedLanguageCode") private var selectedLanguageCode: String = "All"
     @AppStorage("selectedQuality") private var selectedQualityRaw: String = TextRecognitionQuality.accurate.rawValue
+    /// Which recognition engine the capture flow uses. Vision stays the default: the local
+    /// model needs a 763 MB download and takes seconds per page.
+    @AppStorage("recognitionEngine") private var recognitionEngineRaw: String = RecognitionEngine.vision.rawValue
+
+    var recognitionEngine: RecognitionEngine {
+        get { RecognitionEngine(rawValue: recognitionEngineRaw) ?? .vision }
+        set { recognitionEngineRaw = newValue.rawValue }
+    }
 
     var selectedLanguage: TextRecognitionLanguage {
         get {
