@@ -7,6 +7,7 @@
 
 import SwiftUI
 import Vision
+import CryptoKit
 import Foundation
 import AlinFoundation
 
@@ -133,6 +134,63 @@ struct VisionRecognizer: TextRecognizing {
         }
 
         return request
+    }
+}
+
+/// One file the local engine needs, pinned by repository revision and SHA-256. Nothing here
+/// is ever committed or bundled: the user downloads these files into Application Support.
+struct ModelFile: Identifiable, Equatable {
+    let name: String
+    let byteSize: Int64
+    let sha256: String
+    let repository: String
+    let revision: String
+
+    var id: String { name }
+
+    var downloadURL: URL {
+        URL(string: "https://huggingface.co/\(repository)/resolve/\(revision)/\(name)")!
+    }
+}
+
+/// The OvisOCR2 catalogue: the model card is at https://huggingface.co/ATH-MaaS/OvisOCR2
+/// (Apache-2.0) and the GGUF conversion is `bartowski/ATH-MaaS_OvisOCR2-GGUF`. The revision
+/// and both checksums were pinned by the feasibility spike, which ran this exact pair
+/// through llama.cpp build b11160 and produced correct Markdown.
+enum OvisModel {
+    static let displayName = "OvisOCR2"
+    static let modelLicence = "Apache-2.0"
+    static let runtimeLicence = "MIT"
+    static let summary = "Page-level Markdown with tables and formulas, running fully offline."
+
+    static let files: [ModelFile] = [
+        ModelFile(name: "ATH-MaaS_OvisOCR2-Q4_K_M.gguf",
+                  byteSize: 557_867_136,
+                  sha256: "3786d230ceb8f217abdfb8ea8adba975827595053ad5087cb5502898d6a8a68e",
+                  repository: "bartowski/ATH-MaaS_OvisOCR2-GGUF",
+                  revision: "ab22420f3d44201d3aa5a62ca49a665a46b507e9"),
+        ModelFile(name: "mmproj-ATH-MaaS_OvisOCR2-f16.gguf",
+                  byteSize: 204_987_040,
+                  sha256: "4e0e9cb9d79dd0f423ba152a51816aa82a1f1a9d1a0190b6f67b2cd4cc5dd681",
+                  repository: "bartowski/ATH-MaaS_OvisOCR2-GGUF",
+                  revision: "ab22420f3d44201d3aa5a62ca49a665a46b507e9")
+    ]
+
+    static var totalBytes: Int64 { files.reduce(0) { $0 + $1.byteSize } }
+
+    /// Where the files live: the app's Application Support folder, never the repository.
+    static var directory: URL {
+        let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
+            ?? FileManager.default.temporaryDirectory
+        return base.appendingPathComponent("Viz/Models/OvisOCR2", isDirectory: true)
+    }
+
+    static var modelURL: URL? { url(for: files.first?.name) }
+    static var projectorURL: URL? { url(for: files.last?.name) }
+
+    static func url(for name: String?) -> URL? {
+        guard let name else { return nil }
+        return directory.appendingPathComponent(name)
     }
 }
 
@@ -377,4 +435,130 @@ class CaptureService {
     }
 
 
+}
+
+/// Downloads, verifies and removes the local model files. A file only counts as installed
+/// once its SHA-256 matches the manifest; a mismatch deletes it instead of leaving a file
+/// that would fail later.
+@MainActor
+final class ModelStore: ObservableObject {
+    static let shared = ModelStore()
+
+    @Published private(set) var installedBytes: Int64 = 0
+    @Published private(set) var isDownloading = false
+    @Published private(set) var progress: Double = 0
+    @Published private(set) var lastError: String?
+
+    private var downloadTask: Task<Void, Never>?
+
+    init() { refresh() }
+
+    var isInstalled: Bool { installedBytes >= OvisModel.totalBytes }
+
+    /// The runtime that ships inside the app bundle, if the build fetched it.
+    static var bundledRuntimeURL: URL? {
+        Bundle.main.url(forResource: "llama-mtmd-cli", withExtension: nil, subdirectory: "Runtime")
+    }
+
+    func refresh() {
+        var total: Int64 = 0
+        for file in OvisModel.files where FileManager.default.fileExists(atPath: OvisModel.directory.appendingPathComponent(file.name).path) {
+            let size = (try? FileManager.default.attributesOfItem(atPath: OvisModel.directory.appendingPathComponent(file.name).path)[.size] as? Int64) ?? 0
+            if size == file.byteSize { total += size }
+        }
+        installedBytes = total
+    }
+
+    /// Verifies one file against the manifest, deleting it when it does not match.
+    static func verify(_ file: ModelFile, at url: URL) -> Bool {
+        guard let data = try? Data(contentsOf: url, options: .mappedIfSafe) else { return false }
+        let digest = SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+        guard digest == file.sha256 else {
+            try? FileManager.default.removeItem(at: url)
+            return false
+        }
+        return true
+    }
+
+    func download() {
+        guard !isDownloading else { return }
+        isDownloading = true
+        progress = 0
+        lastError = nil
+        downloadTask = Task { [weak self] in
+            guard let self else { return }
+            do {
+                try FileManager.default.createDirectory(at: OvisModel.directory, withIntermediateDirectories: true)
+                var completed: Int64 = 0
+                for file in OvisModel.files {
+                    let destination = OvisModel.directory.appendingPathComponent(file.name)
+                    // A partial download goes to a .part file and is moved into place only
+                    // after the checksum matches, so an interrupted run can never look
+                    // installed.
+                    let partial = destination.appendingPathExtension("part")
+                    try? FileManager.default.removeItem(at: partial)
+
+                    let (bytes, _) = try await URLSession.shared.bytes(from: file.downloadURL)
+                    var buffer = Data()
+                    buffer.reserveCapacity(1 << 20)
+                    var written: Int64 = 0
+                    FileManager.default.createFile(atPath: partial.path, contents: nil)
+                    let handle = try FileHandle(forWritingTo: partial)
+                    defer { try? handle.close() }
+                    for try await byte in bytes {
+                        buffer.append(byte)
+                        if buffer.count >= (1 << 20) {
+                            try handle.write(contentsOf: buffer)
+                            written += Int64(buffer.count)
+                            buffer.removeAll(keepingCapacity: true)
+                            await MainActor.run {
+                                self.progress = Double(completed + written) / Double(OvisModel.totalBytes)
+                            }
+                        }
+                    }
+                    if !buffer.isEmpty {
+                        try handle.write(contentsOf: buffer)
+                        written += Int64(buffer.count)
+                    }
+                    try handle.close()
+
+                    guard written == file.byteSize, Self.verify(file, at: partial) else {
+                        try? FileManager.default.removeItem(at: partial)
+                        throw LocalModelError.modelMissing
+                    }
+                    try? FileManager.default.removeItem(at: destination)
+                    try FileManager.default.moveItem(at: partial, to: destination)
+                    completed += written
+                    await MainActor.run { self.progress = Double(completed) / Double(OvisModel.totalBytes) }
+                }
+                await MainActor.run {
+                    self.isDownloading = false
+                    self.progress = 1
+                    self.refresh()
+                }
+            } catch {
+                await MainActor.run {
+                    self.isDownloading = false
+                    self.lastError = error.localizedDescription
+                    self.refresh()
+                }
+            }
+        }
+    }
+
+    func cancel() {
+        downloadTask?.cancel()
+        downloadTask = nil
+        isDownloading = false
+        refresh()
+    }
+
+    func remove() {
+        downloadTask?.cancel()
+        downloadTask = nil
+        try? FileManager.default.removeItem(at: OvisModel.directory)
+        isDownloading = false
+        progress = 0
+        refresh()
+    }
 }

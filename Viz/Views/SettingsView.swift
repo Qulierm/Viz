@@ -130,6 +130,7 @@ struct SettingsView: View {
             tabButton(index: 1, icon: "keyboard", title: "Shortcuts")
             tabButton(index: 2, icon: "arrow.down.circle", title: "Updates")
             tabButton(index: 3, icon: "info.circle", title: "About")
+            tabButton(index: 4, icon: "doc.text.magnifyingglass", title: "Recognition")
         }
         .padding(.top, 8)
         .padding(.bottom, 6)
@@ -170,6 +171,8 @@ struct SettingsView: View {
                 .environmentObject(updater)
         case 3:
             AboutView()
+        case 4:
+            RecognitionSettingsView()
         default:
             GeneralSettingsView(
                 appendRecognizedText: $appendRecognizedText,
@@ -533,6 +536,92 @@ extension SettingsView {
 }
 
 /// Reports the height of the settings content so the window can be sized to it.
+/// The Recognition tab: which engine turns captures into text, and the local model's files.
+/// Flat style like the other tabs - grey section labels, tinted row glyphs, dividers, no
+/// nested cards.
+struct RecognitionSettingsView: View {
+    @ObservedObject private var appState = AppState.shared
+    @ObservedObject private var store = ModelStore.shared
+
+    private var engineBinding: Binding<RecognitionEngine> {
+        Binding(get: { appState.recognitionEngine },
+                set: { appState.recognitionEngine = $0 })
+    }
+
+    private var installedSizeText: String {
+        let formatter = ByteCountFormatter()
+        formatter.countStyle = .file
+        if store.isInstalled {
+            return "Installed, \(formatter.string(fromByteCount: store.installedBytes))"
+        }
+        if store.installedBytes > 0 {
+            return "Incomplete, \(formatter.string(fromByteCount: store.installedBytes)) of \(formatter.string(fromByteCount: OvisModel.totalBytes))"
+        }
+        return "Not installed, \(formatter.string(fromByteCount: OvisModel.totalBytes)) to download"
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: SettingsView.sectionSpacing) {
+            SettingsSection(title: "Engine") {
+                SettingsRow(title: "Recognition engine",
+                            subtitle: "Vision is fast and needs no downloads; the local model parses whole pages",
+                            icon: "eye") {
+                    Picker("", selection: engineBinding) {
+                        ForEach(RecognitionEngine.allCases) { engine in
+                            Text(engine.title).tag(engine)
+                        }
+                    }
+                    .labelsHidden()
+                    .pickerStyle(.menu)
+                    .frame(maxWidth: 220)
+                }
+            }
+
+            SettingsSection(title: "OvisOCR2 model") {
+                SettingsRow(title: "Model files",
+                            subtitle: "\(OvisModel.summary) \(OvisModel.modelLicence), downloaded by you",
+                            icon: "arrow.down.circle") {
+                    HStack(spacing: 8) {
+                        if store.isDownloading {
+                            ProgressView(value: store.progress)
+                                .progressViewStyle(.linear)
+                                .frame(width: 110)
+                            Button("Cancel") { store.cancel() }
+                                .vizGlassButton()
+                        } else if store.isInstalled {
+                            Button("Delete") { store.remove() }
+                                .vizGlassButton()
+                        } else {
+                            Button("Download") { store.download() }
+                                .vizGlassButton(prominent: true)
+                        }
+                    }
+                }
+                SettingsRowDivider()
+                SettingsRow(title: "Status", subtitle: installedSizeText, icon: "internaldrive") {
+                    Text(store.isInstalled ? "Ready" : "Not ready")
+                        .font(.system(size: 12))
+                        .foregroundStyle(store.isInstalled ? VizTheme.success : .secondary)
+                }
+            }
+
+            if store.lastError != nil || ModelStore.bundledRuntimeURL == nil {
+                SettingsSection(title: "Runtime") {
+                    SettingsRow(title: "llama.cpp runtime",
+                                subtitle: ModelStore.bundledRuntimeURL == nil
+                                    ? "Not in this build, so the local model cannot run yet; Vision stays in use"
+                                    : "Bundled, \(OvisModel.runtimeLicence) licensed",
+                                icon: "exclamationmark.triangle") {
+                        Text(ModelStore.bundledRuntimeURL == nil ? "Missing" : "Present")
+                            .font(.system(size: 12))
+                            .foregroundStyle(ModelStore.bundledRuntimeURL == nil ? .secondary : VizTheme.success)
+                    }
+                }
+            }
+        }
+    }
+}
+
 struct SettingsContentHeightKey: PreferenceKey {
     static var defaultValue: CGFloat = 0
     static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
