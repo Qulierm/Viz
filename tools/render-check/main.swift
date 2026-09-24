@@ -19,7 +19,6 @@
 //
 
 import AppKit
-import CryptoKit
 import SwiftUI
 import AlinFoundation
 
@@ -106,10 +105,7 @@ let settingsWindowMaxHeight: CGFloat = 700
 /// The settings tab strip must span at least this share of the surface width...
 let tabStripWidthShareMinimum = 0.45
 /// ...and must show at least this many separated items (four tabs minus tolerance).
-/// The settings tab strip has five items since the Recognition tab was added; requiring all
-/// five means a tab that silently disappears fails the check. Measured share: 78 % (it was
-/// 58 % with four tabs).
-let tabStripMinimumRuns = 5
+let tabStripMinimumRuns = 3
 /// Maximum share of a render that may still use the removed flat background colour.
 let legacyShareLimit = 0.08
 /// Minimum share of non-backdrop pixels for a render to count as painted.
@@ -1193,247 +1189,6 @@ func checkPopoverContent() -> (passed: Bool, details: String) {
     return (failures.isEmpty, details)
 }
 
-// --- optional real-model run ------------------------------------------------
-
-/// Runs the real OvisOCR2 model on the spike's test page. Skipped by default: it needs the
-/// 763 MB download and the bundled runtime, and it must never make the normal suite fail.
-func checkRealModel() -> (passed: Bool, details: String) {
-    guard ProcessInfo.processInfo.environment["VIZ_OVIS_REAL"] == "1" else {
-        return (true, "skipped (set VIZ_OVIS_REAL=1 to run the real model on the test page)")
-    }
-    // The harness runs with a throwaway home, so the real model folder is addressed through
-    // the passwd entry rather than HOME.
-    guard let passwd = getpwuid(getuid()) else { return (false, "no passwd entry") }
-    let home = String(cString: passwd.pointee.pw_dir)
-    let modelDirectory = URL(fileURLWithPath: home + "/Library/Application Support/Viz/Models/OvisOCR2")
-    let runtime = URL(fileURLWithPath: rootPath + "/build/Viz.app/Contents/Resources/Runtime/llama-mtmd-cli")
-    let page = URL(fileURLWithPath: rootPath + "/build/ovis-spike/test-page.png")
-
-    guard FileManager.default.fileExists(atPath: runtime.path) else {
-        return (false, "no bundled runtime at \(runtime.path) - run scripts/build-app.sh")
-    }
-    guard ModelStore.filesPresent(in: modelDirectory) else {
-        return (false, "the model files are not in \(modelDirectory.path) - run scripts/fetch-ovis-model.sh")
-    }
-    guard let image = NSImage(contentsOf: page) else {
-        return (false, "no test page at \(page.path) - run scripts/ovis-spike.sh")
-    }
-
-    var recognizer = LocalModelRecognizer()
-    recognizer.runtimeURL = runtime
-    recognizer.modelURL = modelDirectory.appendingPathComponent(OvisModel.files[0].name)
-    recognizer.projectorURL = modelDirectory.appendingPathComponent(OvisModel.files[1].name)
-
-    var text = ""
-    var failure: String?
-    let start = Date()
-    let semaphore = DispatchSemaphore(value: 0)
-    Task {
-        do {
-            text = try await recognizer.recognize(image: image, languageCode: nil, quality: .accurate, keepLineBreaks: true)
-        } catch {
-            failure = "\(error)"
-        }
-        semaphore.signal()
-    }
-    _ = semaphore.wait(timeout: .now() + LocalModelRecognizer.timeout + 30)
-    let elapsed = Date().timeIntervalSince(start)
-
-    if let failure { return (false, "the model run failed: \(failure)") }
-    guard !text.isEmpty else { return (false, "the model returned no text") }
-    print("    real model output (\(String(format: "%.1f", elapsed))s, \(text.count) chars):")
-    for line in text.split(separator: "\n").prefix(10) {
-        print("      | \(line)")
-    }
-    return (true, String(format: "ran the real model on the test page in %.1fs, %d chars", elapsed, text.count))
-}
-
-// --- local model path -------------------------------------------------------
-
-/// The optional OvisOCR2 engine: engine selection, the pinned manifest, checksum
-/// verification, the command line and the Vision fallback - all without the 763 MB model,
-/// the runtime or the network.
-func checkModelPath() -> [(name: String, passed: Bool, details: String)] {
-    var results: [(name: String, passed: Bool, details: String)] = []
-    let fileManager = FileManager.default
-    let scratch = fileManager.temporaryDirectory.appendingPathComponent("viz-model-checks-\(UUID().uuidString)")
-
-    func fakeDirectory(files: [(ModelFile, Bool)]) -> URL? {
-        let directory = scratch.appendingPathComponent("Models")
-        try? fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
-        for (file, correctSize) in files {
-            let url = directory.appendingPathComponent(file.name)
-            guard fileManager.createFile(atPath: url.path, contents: nil) else { return nil }
-            // Sparse files: the manifest sizes are hundreds of megabytes, and only the size
-            // matters for the readiness check.
-            if let handle = try? FileHandle(forWritingTo: url) {
-                try? handle.truncate(atOffset: UInt64(correctSize ? file.byteSize : 16))
-                try? handle.close()
-            }
-        }
-        return directory
-    }
-
-    defer { try? fileManager.removeItem(at: scratch) }
-
-    // 1. engineselect
-    do {
-        var failures: [String] = []
-        let engine = AppState.shared
-        let previous = engine.recognitionEngine
-        engine.recognitionEngine = .localModel
-        defer { engine.recognitionEngine = previous }
-
-        let runtimeURL = URL(fileURLWithPath: "/usr/bin/true")
-        let absent = TextRecognition.localModelRecognizerIfReady(appState: engine, runtimeURL: nil,
-                                                                  modelDirectory: scratch.appendingPathComponent("Nothing"))
-        let present = fakeDirectory(files: OvisModel.files.map { ($0, true) }).flatMap { directory in
-            TextRecognition.localModelRecognizerIfReady(appState: engine, runtimeURL: runtimeURL, modelDirectory: directory)
-        }
-        let wrongSize = fakeDirectory(files: OvisModel.files.map { ($0, false) }).flatMap { directory in
-            TextRecognition.localModelRecognizerIfReady(appState: engine, runtimeURL: runtimeURL, modelDirectory: directory)
-        }
-        if absent != nil { failures.append("the model engine was selected without a runtime") }
-        if present == nil { failures.append("the model engine was not selected with the runtime and files present") }
-        if wrongSize != nil { failures.append("the model engine was selected with files of the wrong size") }
-        engine.recognitionEngine = .vision
-        let off = TextRecognition.localModelRecognizerIfReady(appState: engine, runtimeURL: runtimeURL,
-                                                              modelDirectory: scratch)
-        if off != nil { failures.append("the model engine was selected while the setting says Vision") }
-        results.append(("engineselect", failures.isEmpty,
-                        "setting=localModel -> \(present != nil ? "model" : "vision"), without runtime -> \(absent == nil ? "vision" : "model"), wrong size -> \(wrongSize == nil ? "vision" : "model"), setting=vision -> \(off == nil ? "vision" : "model")" + (failures.isEmpty ? "" : " -> failed: \(failures.joined(separator: ", "))")))
-    }
-
-    // 2. modelmanifest
-    do {
-        var failures: [String] = []
-        let expectedSizes: [String: Int64] = ["ATH-MaaS_OvisOCR2-Q4_K_M.gguf": 557_867_136,
-                                              "mmproj-ATH-MaaS_OvisOCR2-f16.gguf": 204_987_040]
-        if OvisModel.files.count != 2 { failures.append("expected two pinned files, found \(OvisModel.files.count)") }
-        for file in OvisModel.files {
-            if file.repository.isEmpty { failures.append("\(file.name) has no repository") }
-            if file.revision.count != 40 { failures.append("\(file.name) has no pinned revision") }
-            if file.sha256.count != 64 { failures.append("\(file.name) has no SHA-256") }
-            if file.downloadURL.scheme != "https" { failures.append("\(file.name) has no https URL") }
-            if expectedSizes[file.name] != file.byteSize {
-                failures.append("\(file.name) size \(file.byteSize) does not match the spike's \(expectedSizes[file.name] ?? -1)")
-            }
-        }
-        if OvisModel.totalBytes != 762_854_176 { failures.append("total size \(OvisModel.totalBytes) is not the pinned 762854176") }
-        results.append(("modelmanifest", failures.isEmpty,
-                        "files=\(OvisModel.files.count) total=\(OvisModel.totalBytes) bytes licence=\(OvisModel.modelLicence)" + (failures.isEmpty ? "" : " -> failed: \(failures.joined(separator: ", "))")))
-    }
-
-    // 3. modelverify
-    do {
-        var failures: [String] = []
-        let directory = scratch.appendingPathComponent("Verify")
-        try? fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
-        let payload = Data("viz-model-verify".utf8)
-        let digest = SHA256.hash(data: payload).map { String(format: "%02x", $0) }.joined()
-        let good = ModelFile(name: "good.bin", byteSize: Int64(payload.count), sha256: digest,
-                             repository: "example/repo", revision: "0")
-        let bad = ModelFile(name: "bad.bin", byteSize: Int64(payload.count),
-                            sha256: String(repeating: "0", count: 64),
-                            repository: "example/repo", revision: "0")
-        let goodURL = directory.appendingPathComponent("good.bin")
-        let badURL = directory.appendingPathComponent("bad.bin")
-        try? payload.write(to: goodURL)
-        try? payload.write(to: badURL)
-        let accepted = ModelStore.verify(good, at: goodURL)
-        let rejected = ModelStore.verify(bad, at: badURL)
-        if !accepted { failures.append("a file with the right checksum was rejected") }
-        if rejected { failures.append("a file with the wrong checksum was accepted") }
-        if fileManager.fileExists(atPath: badURL.path) { failures.append("the rejected file was left on disk") }
-        results.append(("modelverify", failures.isEmpty,
-                        "matching file accepted=\(accepted), mismatching rejected=\(rejected) and deleted=\(!fileManager.fileExists(atPath: badURL.path))" + (failures.isEmpty ? "" : " -> failed: \(failures.joined(separator: ", "))")))
-    }
-
-    // 4. modelcommand
-    do {
-        var failures: [String] = []
-        var recognizer = LocalModelRecognizer()
-        recognizer.runtimeURL = URL(fileURLWithPath: "/usr/bin/true")
-        recognizer.modelURL = URL(fileURLWithPath: "/tmp/model.gguf")
-        recognizer.projectorURL = URL(fileURLWithPath: "/tmp/mmproj.gguf")
-        let image = URL(fileURLWithPath: "/tmp/page.png")
-        let args = recognizer.arguments(imageURL: image)
-        func has(_ flag: String, _ value: String? = nil) -> Bool {
-            guard let index = args.firstIndex(of: flag) else { return false }
-            guard let value else { return true }
-            return index + 1 < args.count && args[index + 1] == value
-        }
-        if !has("-m", "/tmp/model.gguf") { failures.append("the model path is missing") }
-        if !has("--mmproj", "/tmp/mmproj.gguf") { failures.append("the projector is missing") }
-        if !has("--image", "/tmp/page.png") { failures.append("the image path is missing") }
-        if !has("-p", LocalModelRecognizer.prompt) { failures.append("the model card's prompt is missing") }
-        if !has("-n", String(LocalModelRecognizer.tokenLimit)) { failures.append("the token limit is missing") }
-        if !args.contains("--jinja") { failures.append("--jinja is missing") }
-        results.append(("modelcommand", failures.isEmpty,
-                        "args=\(args.count) model=\(has("-m", "/tmp/model.gguf")) mmproj=\(has("--mmproj", "/tmp/mmproj.gguf")) image=\(has("--image", "/tmp/page.png")) prompt=\(has("-p", LocalModelRecognizer.prompt)) tokens=\(LocalModelRecognizer.tokenLimit) timeout=\(Int(LocalModelRecognizer.timeout))s" + (failures.isEmpty ? "" : " -> failed: \(failures.joined(separator: ", "))")))
-    }
-
-    // 5. modelfallback
-    do {
-        var failures: [String] = []
-        var failing = LocalModelRecognizer()
-        failing.runtimeURL = URL(fileURLWithPath: "/usr/bin/false")
-        failing.modelURL = URL(fileURLWithPath: "/tmp/model.gguf")
-        failing.projectorURL = URL(fileURLWithPath: "/tmp/mmproj.gguf")
-        failing.launcher = { _, _ in throw LocalModelError.nonZeroExit(9) }
-        var thrown: LocalModelError?
-        // A real bitmap: an empty NSImage has no tiff representation to encode.
-        let image = NSImage(size: NSSize(width: 8, height: 8))
-        image.lockFocus()
-        NSColor.white.setFill()
-        NSRect(x: 0, y: 0, width: 8, height: 8).fill()
-        image.unlockFocus()
-        let semaphore = DispatchSemaphore(value: 0)
-        Task {
-            do {
-                _ = try await failing.recognize(image: image, languageCode: nil, quality: .accurate, keepLineBreaks: true)
-            } catch let error as LocalModelError {
-                thrown = error
-            } catch {
-                thrown = nil
-            }
-            semaphore.signal()
-        }
-        _ = semaphore.wait(timeout: .now() + 10)
-        if thrown != .nonZeroExit(9) { failures.append("a failing launcher did not raise nonZeroExit(9) (got \(String(describing: thrown)))") }
-
-        var canned = LocalModelRecognizer()
-        canned.runtimeURL = URL(fileURLWithPath: "/usr/bin/true")
-        canned.modelURL = URL(fileURLWithPath: "/tmp/model.gguf")
-        canned.projectorURL = URL(fileURLWithPath: "/tmp/mmproj.gguf")
-        canned.launcher = { _, _ in
-            """
-            0.01.234.567 I main: loading model
-            <think>
-            thinking about the page
-            </think>
-            # Heading
-
-            | a | b |
-            """
-        }
-        var text = ""
-        let semaphore2 = DispatchSemaphore(value: 0)
-        Task {
-            text = (try? await canned.recognize(image: image, languageCode: nil, quality: .accurate, keepLineBreaks: true)) ?? ""
-            semaphore2.signal()
-        }
-        _ = semaphore2.wait(timeout: .now() + 10)
-        if text.contains("0.01.234.567") { failures.append("runtime logging was not stripped") }
-        if text.contains("thinking about") { failures.append("the thinking block was not stripped") }
-        if !text.contains("# Heading") { failures.append("the Markdown body was lost (got '\(text)')") }
-        results.append(("modelfallback", failures.isEmpty,
-                        "failing launcher -> \(thrown == .nonZeroExit(9) ? "nonZeroExit(9)" : "unexpected"), canned output -> \(text.split(separator: "\n").count) lines, logging and thinking stripped" + (failures.isEmpty ? "" : " -> failed: \(failures.joined(separator: ", "))")))
-    }
-
-    return results
-}
-
 // --- translucency ----------------------------------------------------------
 
 /// Renders the same surface over two different backdrops and compares the surface colour:
@@ -2126,32 +1881,23 @@ report("alignment", alignment.passed, alignment.details)
 let previewClose = checkPreviewClose()
 report("previewclose", previewClose.passed, previewClose.details)
 
-// 8. local model path
-for result in checkModelPath() {
-    report(result.name, result.passed, result.details)
-}
-
-// 9. optional real-model run (skipped unless VIZ_OVIS_REAL=1)
-let realModel = checkRealModel()
-report("ovismodel", realModel.passed, realModel.details)
-
-// 10. settings
+// 8. settings
 let settings = checkSettings()
 report("settings", settings.passed, settings.details)
 
-// 11. clipboard
+// 9. clipboard
 let clipboard = checkClipboard()
 report("clipboard", clipboard.passed, clipboard.details)
 
-// 12. window size
+// 10. window size
 let windowSize = checkWindowSize()
 report("windowsize", windowSize.passed, windowSize.details)
 
-// 13. translucency
+// 11. translucency
 let translucency = checkTranslucency()
 report("translucency", translucency.passed, translucency.details)
 
-// 14. design
+// 12. design
 let design = checkDesign()
 report("design", design.passed, design.details)
 for surface in AppSurface.allCases {

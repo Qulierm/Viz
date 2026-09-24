@@ -46,15 +46,6 @@ struct PreviewContentView: View {
             }
             .padding(2)
 
-            // A short, non-blocking note when the local model could not be used and Vision
-            // took over. It disappears with the next capture.
-            if let note = AppState.shared.recognitionNote {
-                Text(note)
-                    .font(.system(size: 11))
-                    .foregroundStyle(.secondary)
-                    .padding(.horizontal, 8)
-                    .padding(.bottom, 4)
-            }
 
             ScrollView {
                 LazyVStack(alignment: .leading) {
@@ -134,15 +125,6 @@ struct ColorPreviewView: View {
             }
             .padding(2)
 
-            // A short, non-blocking note when the local model could not be used and Vision
-            // took over. It disappears with the next capture.
-            if let note = AppState.shared.recognitionNote {
-                Text(note)
-                    .font(.system(size: 11))
-                    .foregroundStyle(.secondary)
-                    .padding(.horizontal, 8)
-                    .padding(.bottom, 4)
-            }
 
             VStack(alignment: .leading) {
                 Text("Hex: \(AppState.shared.colorSample.hex)")
