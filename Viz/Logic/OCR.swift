@@ -517,7 +517,8 @@ final class ModelStore: ObservableObject {
     }
 
     /// Verifies one file against the manifest, deleting it when it does not match.
-    static func verify(_ file: ModelFile, at url: URL) -> Bool {
+    /// Nonisolated so the capture path and the harness can both call it.
+    nonisolated static func verify(_ file: ModelFile, at url: URL) -> Bool {
         guard let data = try? Data(contentsOf: url, options: .mappedIfSafe) else { return false }
         let digest = SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
         guard digest == file.sha256 else {
