@@ -39,6 +39,10 @@ class AppState: ObservableObject {
         set { recognitionEngineRaw = newValue.rawValue }
     }
 
+    /// A short, non-blocking note about the last recognition, for example when the local
+    /// model was unavailable and Vision was used instead. Shown in the preview window.
+    @Published var recognitionNote: String?
+
     var selectedLanguage: TextRecognitionLanguage {
         get {
             TextRecognitionLanguage.loadSupportedLanguages().first(where: { $0.code == selectedLanguageCode }) ?? TextRecognitionLanguage(id: "All", displayName: "All", code: nil)

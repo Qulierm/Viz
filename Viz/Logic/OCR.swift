@@ -345,28 +345,63 @@ struct TextRecognition {
 
     //MARK: Universal Recognition
     func recognizeContent() {
-        // Vision is the only engine wired into the capture flow so far; the engine setting
-        // exists but the local model is not used here yet.
-        let recognizer: TextRecognizing = VisionRecognizer()
         let languageCode = appState.selectedLanguage.code
         let quality = appState.selectedQuality
 
         DispatchQueue.global(qos: .userInitiated).async {
             Task {
-                do {
-                    let combinedText = try await recognizer.recognize(image: self.image,
-                                                                      languageCode: languageCode,
-                                                                      quality: quality,
-                                                                      keepLineBreaks: self.keepLineBreaks)
-                    DispatchQueue.main.async {
-                        let finalItem = TextItem(text: combinedText.isEmpty ? "Unable to extract any content from selection" : combinedText)
-                        self.processRecognitionResult(textItem: finalItem, failureMessage: "Unable to extract any content from selection")
+                // The local model is only used when the user selected it AND its files and
+                // the runtime are present; anything else means Vision.
+                var note: String?
+                var combinedText = ""
+                if let model = Self.localModelRecognizerIfReady(appState: self.appState) {
+                    do {
+                        combinedText = try await model.recognize(image: self.image,
+                                                                 languageCode: languageCode,
+                                                                 quality: quality,
+                                                                 keepLineBreaks: self.keepLineBreaks)
+                    } catch {
+                        // Every failure falls back to Vision for this capture, with a short
+                        // note naming the reason. A capture never fails because of the model.
+                        let reason = (error as? LocalModelError)?.errorDescription ?? error.localizedDescription
+                        note = "Local model unavailable (\(reason)); used Vision instead"
+                        printOS("Local model failed, falling back to Vision: \(reason)")
                     }
-                } catch {
-                    printOS("Failed to recognize content: \(error.localizedDescription)")
+                }
+                if combinedText.isEmpty {
+                    do {
+                        combinedText = try await VisionRecognizer().recognize(image: self.image,
+                                                                              languageCode: languageCode,
+                                                                              quality: quality,
+                                                                              keepLineBreaks: self.keepLineBreaks)
+                    } catch {
+                        printOS("Failed to recognize content: \(error.localizedDescription)")
+                    }
+                }
+                let text = combinedText
+                let finalNote = note
+                DispatchQueue.main.async {
+                    AppState.shared.recognitionNote = finalNote
+                    let finalItem = TextItem(text: text.isEmpty ? "Unable to extract any content from selection" : text)
+                    self.processRecognitionResult(textItem: finalItem, failureMessage: "Unable to extract any content from selection")
                 }
             }
         }
+    }
+
+    /// The local recogniser, but only when the engine is selected and everything it needs is
+    /// on disk: the pinned runtime inside the bundle plus both verified model files.
+    static func localModelRecognizerIfReady(appState: AppState,
+                                            runtimeURL: URL? = ModelStore.bundledRuntimeURL,
+                                            modelDirectory: URL = OvisModel.directory) -> LocalModelRecognizer? {
+        guard appState.recognitionEngine == .localModel else { return nil }
+        guard let runtime = runtimeURL else { return nil }
+        guard ModelStore.filesPresent(in: modelDirectory) else { return nil }
+        var recognizer = LocalModelRecognizer()
+        recognizer.runtimeURL = runtime
+        recognizer.modelURL = modelDirectory.appendingPathComponent(OvisModel.files[0].name)
+        recognizer.projectorURL = modelDirectory.appendingPathComponent(OvisModel.files[1].name)
+        return recognizer
     }
 
     @AppStorage("keepLineBreaks") private var keepLineBreaks: Bool = true
@@ -455,9 +490,21 @@ final class ModelStore: ObservableObject {
 
     var isInstalled: Bool { installedBytes >= OvisModel.totalBytes }
 
-    /// The runtime that ships inside the app bundle, if the build fetched it.
-    static var bundledRuntimeURL: URL? {
+    /// The runtime that ships inside the app bundle, if the build fetched it. Nonisolated:
+    /// the recognition path checks it off the main actor.
+    nonisolated static var bundledRuntimeURL: URL? {
         Bundle.main.url(forResource: "llama-mtmd-cli", withExtension: nil, subdirectory: "Runtime")
+    }
+
+    /// True when both pinned files are on disk with their manifest sizes. The directory is a
+    /// parameter so the harness can point at a fake folder instead of the real one.
+    nonisolated static func filesPresent(in directory: URL = OvisModel.directory) -> Bool {
+        for file in OvisModel.files {
+            let path = directory.appendingPathComponent(file.name).path
+            let size = (try? FileManager.default.attributesOfItem(atPath: path)[.size] as? Int64) ?? 0
+            if size != file.byteSize { return false }
+        }
+        return true
     }
 
     func refresh() {

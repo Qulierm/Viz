@@ -28,13 +28,21 @@ BIN="$DEST/llama-mtmd-cli"
 force=0
 [[ "${1:-}" == "--force" ]] && force=1
 
+mkdir -p "$RUNTIME_DIR"
+
+# The runtime is MIT licensed, so its licence text travels with it into the bundle.
+LICENCE="$RUNTIME_DIR/LICENSE-llama.cpp"
+if [[ ! -s "$LICENCE" ]]; then
+  echo "==> Fetching the llama.cpp licence"
+  curl -sSL --fail -o "$LICENCE" "https://raw.githubusercontent.com/ggml-org/llama.cpp/${LLAMA_TAG}/LICENSE" \
+    || echo "warning: could not fetch the llama.cpp licence text" >&2
+fi
+
 if [[ -x "$BIN" && $force -eq 0 ]]; then
   echo "==> llama.cpp runtime already present: $BIN"
   "$BIN" --version | head -1
   exit 0
 fi
-
-mkdir -p "$RUNTIME_DIR"
 
 if [[ ! -f "$RUNTIME_DIR/$LLAMA_ASSET" || $force -eq 1 ]]; then
   echo "==> Downloading $LLAMA_ASSET"

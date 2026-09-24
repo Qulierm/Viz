@@ -192,6 +192,32 @@ write_info_plist() {
   done
 }
 
+# The optional local recognition engine needs the pinned llama.cpp runtime inside the
+# bundle. It is fetched when missing; if it cannot be fetched the app still builds and runs
+# with Apple Vision only, which is the default engine. This runs before signing, because the
+# bundle's signature seals every resource it contains.
+bundle_runtime() {
+  local runtime_source="$ROOT/build/runtime/b11160/llama-mtmd-cli"
+  if [[ ! -x "$runtime_source" ]]; then
+    echo "==> Fetching the optional llama.cpp runtime"
+    bash "$ROOT/scripts/fetch-runtime.sh" || echo "warning: the runtime could not be fetched; the app will use Vision only"
+  fi
+  if [[ -x "$runtime_source" ]]; then
+    echo "==> Bundling the llama.cpp runtime"
+    mkdir -p "$RESOURCES_DIR/Runtime"
+    cp "$runtime_source" "$RESOURCES_DIR/Runtime/llama-mtmd-cli"
+    chmod +x "$RESOURCES_DIR/Runtime/llama-mtmd-cli"
+    if [[ -s "$ROOT/build/runtime/LICENSE-llama.cpp" ]]; then
+      cp "$ROOT/build/runtime/LICENSE-llama.cpp" "$RESOURCES_DIR/Runtime/LICENSE-llama.cpp"
+    fi
+    # The runtime links against its own dylibs, so they travel with it.
+    cp "$ROOT"/build/runtime/b11160/*.dylib "$RESOURCES_DIR/Runtime/" 2>/dev/null || true
+    echo "    $(du -sh "$RESOURCES_DIR/Runtime" | cut -f1) in Contents/Resources/Runtime"
+  else
+    echo "warning: no runtime in the bundle; the local model engine will fall back to Vision"
+  fi
+}
+
 sign_bundle() {
   # Viz/Viz.entitlements is deliberately NOT applied: its iCloud entitlements are
   # restricted, require a provisioning profile, and would make macOS kill the app at
@@ -254,6 +280,7 @@ assemble_bundle
 copy_sound
 generate_icon
 write_info_plist
+bundle_runtime
 sign_bundle
 self_check
 
