@@ -46,7 +46,6 @@ struct PreviewContentView: View {
             }
             .padding(2)
 
-
             ScrollView {
                 LazyVStack(alignment: .leading) {
                     ForEach(content.items, id: \.id) { item in
@@ -124,7 +123,6 @@ struct ColorPreviewView: View {
                 .help("Close")
             }
             .padding(2)
-
 
             VStack(alignment: .leading) {
                 Text("Hex: \(AppState.shared.colorSample.hex)")
