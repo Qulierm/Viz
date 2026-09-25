@@ -36,7 +36,9 @@ struct ContentView: View {
                         dismissPopover()
                     }
                     .help("Capture section of screen to extract text and barcodes")
-                    .buttonStyle(RoundedRectangleButtonStyle(image: "viewfinder", size: 15))
+                    // Capture is the popover's primary action, so its badge takes the accent
+                    // fill the way the reference's connected network does; the rest are neutral.
+                    .buttonStyle(RoundedRectangleButtonStyle(image: "viewfinder", size: 15, primary: true))
 
                     ShortcutEditorView(name: .captureContent)
 

@@ -110,6 +110,9 @@ struct RoundedRectangleButtonStyle: ButtonStyle {
     @State private var isHovered = false
     let image: String
     let size: CGFloat
+    /// True for the popover's primary action (Capture): the reference gives that item's badge
+    /// the accent fill and every other item the neutral one.
+    let primary: Bool
 
     /// SF Symbols have different intrinsic proportions at the same point size - the camera
     /// draws about 20 % wider than the viewfinder - so a single shared size makes the row
@@ -127,11 +130,11 @@ struct RoundedRectangleButtonStyle: ButtonStyle {
     /// labels below them start at the same y.
     private static let iconSlot = CGSize(width: 24, height: 18)
 
-    /// How long the tile's hover feedback takes (the fallback hairline brightening). The
-    /// system's own control feedback sits in the 0.1-0.15 s range, and it replaced a 0.3 s
-    /// ease that made the row feel hand-animated next to the rest of the menu bar. Not
-    /// private on purpose: the render harness's `nativetiles` check asserts this value is
-    /// still inside the system's band.
+    /// How long the tile's hover feedback takes (the hover highlight fading in). The system's
+    /// own control feedback sits in the 0.1-0.15 s range, and it replaced a 0.3 s ease that
+    /// made the row feel hand-animated next to the rest of the menu bar. Not private on
+    /// purpose: the render harness's `nativetiles` check asserts this value is still inside
+    /// the system's band.
     static let hoverDuration: TimeInterval = 0.15
 
     private var pointSize: CGFloat {
@@ -140,26 +143,43 @@ struct RoundedRectangleButtonStyle: ButtonStyle {
     let color: Color?
     let shortcut: KeyboardShortcuts.Shortcut?
 
-    init(image: String, size: CGFloat, color: Color? = .primary, shortcut: KeyboardShortcuts.Shortcut? = nil) {
+    init(image: String, size: CGFloat, color: Color? = .primary,
+         shortcut: KeyboardShortcuts.Shortcut? = nil, primary: Bool = false) {
         self.image = image
         self.size = size
         self.color = color
         self.shortcut = shortcut
+        self.primary = primary
+    }
+
+    /// The tile's icon, in the reference's circular badge: a 27 pt circle with the glyph inside
+    /// it. The badge is drawn as a *background* of the icon slot rather than as a layout
+    /// element, so it grows into the tile's own padding (4.5 pt above and below the 18 pt slot)
+    /// and the popover keeps its measured 99 pt height instead of growing for it. The slot
+    /// stays the layout slot, which is what keeps the five glyphs optically normalised.
+    @ViewBuilder
+    private var badge: some View {
+        Image(systemName: image)
+            // A `.resizable()` symbol image has no intrinsic size, so it is the first
+            // thing a tight popover height squeezes on macOS 27, collapsing the icon
+            // to nothing while the labels survive. Font-based sizing keeps the symbol
+            // at its point size, and `.fixedSize()` makes the slot rigid.
+            .font(.system(size: pointSize))
+            .foregroundStyle(VizTheme.badgeGlyph(primary: primary))
+            .frame(width: Self.iconSlot.width, height: Self.iconSlot.height)
+            .fixedSize()
+            .background {
+                Circle()
+                    .fill(VizTheme.badgeFill(primary: primary))
+                    .frame(width: VizTheme.badgeDiameter, height: VizTheme.badgeDiameter)
+            }
     }
 
     func makeBody(configuration: Configuration) -> some View {
         HStack {
             Spacer()
             VStack(alignment: .center, spacing: 10) {
-                Image(systemName: image)
-                    // A `.resizable()` symbol image has no intrinsic size, so it is the first
-                    // thing a tight popover height squeezes on macOS 27, collapsing the icon
-                    // to nothing while the labels survive. Font-based sizing keeps the symbol
-                    // at its point size, and `.fixedSize()` makes the slot rigid.
-                    .font(.system(size: pointSize))
-                    .frame(width: Self.iconSlot.width, height: Self.iconSlot.height)
-                    .fixedSize()
-                    .foregroundStyle(.primary)
+                badge
                 configuration.label
                     .font(.footnote)
                     .foregroundStyle(.primary)
@@ -179,18 +199,16 @@ struct RoundedRectangleButtonStyle: ButtonStyle {
         .padding(.horizontal, 12)
         .padding(.top, 8)
         .padding(.bottom, 7)
-        // The tile carries no hand-made chrome any more. On macOS 26+ `vizGlassControl`
-        // gives it the system's interactive glass, which supplies the hover and press
-        // response itself, so no ring is drawn over it; the material fallback below macOS 26
-        // has no interactive glass and keeps one subtle hairline edge, and the hover state
-        // only brightens that edge. The press scale that used to live here is gone as well:
-        // macOS lightens or dims a control while it is held down, it never scales it.
-        // The hover timing is the system's pace for control feedback, not the 0.3 s the
-        // hand-made ring used.
-        .vizGlassControl(cornerRadius: VizTheme.cornerControl, hovered: isHovered)
+        // The tile is the reference's row, ported: **no fill at rest** - the panel's material is
+        // what shows through - and the system's unemphasized selection colour while hovered, in
+        // the reference's corner. The badge repeat is what keeps the row reading as five
+        // controls without a resting fill, so nothing else is drawn here: the glass fill and
+        // the hand-made ring the tile used to carry are both gone, and so is the press scale
+        // (macOS dims or lightens a control while it is held down, it never scales it).
+        .vizTileHighlight(cornerRadius: VizTheme.cornerControl, hovered: isHovered)
         .foregroundColor(.primary)
-        // Same continuous curve as the glass shape, so the tile's edge - glass or fallback
-        // hairline - follows one rounded rectangle instead of being squared off by a clip.
+        // One continuous rounded rectangle for the tile and its hover highlight, so the
+        // highlight's edge and the tile's own bounds cannot disagree.
         .clipShape(VizTheme.controlShape())
         .animation(.easeInOut(duration: Self.hoverDuration), value: isHovered)
         .onHover { inside in

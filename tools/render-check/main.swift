@@ -54,9 +54,21 @@ let accentPixelThreshold = 60
 /// gets its own floor: measured 1127 (light) / 1307 (dark), floor at ~3.7x headroom. It is
 /// stricter than the generic floor, so a lost title gradient or update indicator fails.
 let popoverAccentFloor = 300
-/// Maximum share of accent pixels inside the popover's action-button band. The buttons are
-/// neutral glass; anything blue there means the accent has crept back into the main menu.
-let buttonAccentShareLimit = 0.015
+/// Maximum share of accent pixels inside the popover's action-button band. The band holds
+/// exactly one accented badge - the reference's filled circle on the popover's primary action
+/// (Capture) - which measures about 1.8 % of the band; the four other badges are neutral, so
+/// the ceiling is one badge plus a quarter of a badge of margin.
+let buttonAccentShareLimit = 0.024
+/// The popover's button row geometry, shared by the alignment measurement and the accent
+/// column split so the two cannot drift: 16 pt of row padding, 8 pt between buttons, and the
+/// five columns that leaves inside the popover's 480 pt width.
+let buttonRowPadding = 16.0
+let buttonColumnGap = 8.0
+let buttonColumnWidth = (contentWidth - 2 * buttonRowPadding - 4 * buttonColumnGap) / 5
+/// Maximum share of accent pixels in the four button columns that are not the primary one.
+/// Those columns are the neutral part of the row and must stay neutral: the old rule ("no accent
+/// in the band at all") is preserved here, column by column.
+let buttonAccentShareLimitNeutralColumns = 0.001
 /// The restored Viz surface must read as the classic blue-grey: the blue channel has to
 /// exceed red by at least this much. Measured: a neutral material surface gives 0, the light
 /// tint (0.15 roots, 0.20 cards) gives 2 (popover, light) to 7 (settings, dark), and the
@@ -73,12 +85,17 @@ let previewCloseSurfaceDeltaMinimum: Double = 30
 /// measures 34 px, so this threshold sits between them.
 let previewCloseRunLimit = 45
 /// Alignment tolerances for the five popover buttons, in device pixels unless stated.
-/// Measured after the alignment pass: icon width spread 1 px, icon centres within 2 px of
-/// the row mean, label tops identical, ink balance within 2 pt.
+/// Measured after the reference port: badge width spread 0 px (all five badges are the same
+/// 27 pt circle), glyph width spread 1 px, badge centres within 2 px of the row mean, label
+/// tops identical, badge-to-label gaps identical.
 let alignmentIconWidthSpreadLimit = 4
 let alignmentIconCentreTolerance = 3
 let alignmentRowTolerance = 2
 let alignmentInkBalanceTolerance: Double = 3
+/// A pixel counts as the badge's *glyph* above this luminance. The glyph is white (1.0, or
+/// 0.89 for the label-coloured glyph on the neutral badges), while the badge fills composite to
+/// about 0.41 (system accent) and 0.28 (neutral), so the threshold separates them with room.
+let alignmentGlyphBrightness: Double = 0.75
 /// How far the popover content's dominant colour may differ from the harness backdrop it
 /// was composited over. The content is transparent over the panel's menu material, so the
 /// backdrop is what shows; a content-owned surface (the old tinted glass root) shifts it by
@@ -690,8 +707,8 @@ func checkAlignment() -> (passed: Bool, details: String) {
     }
 
     let scale = Double(rep.pixelsWide) / Double(size.width)
-    let rowPadding = 16.0
-    let buttonGap = 8.0
+    let rowPadding = buttonRowPadding
+    let buttonGap = buttonColumnGap
     let buttonWidth = (Double(size.width) - 2 * rowPadding - 4 * buttonGap) / 5
     let backdrop = Backdrop.dark.usingColorSpace(.deviceRGB) ?? .black
 
@@ -705,13 +722,16 @@ func checkAlignment() -> (passed: Bool, details: String) {
     struct ButtonMeasure {
         let index: Int
         let centre: Double
-        let iconWidth: Int
-        let iconCentreX: Double
-        let iconCentreY: Double
+        /// The icon badge: the reference's 27 pt circle, measured as ink.
+        let badgeWidth: Int
+        let badgeCentreX: Double
+        let badgeCentreY: Double
+        /// The white glyph inside the badge - the optical normalisation guard.
+        let glyphWidth: Int
         let labelTop: Int
         let pillCentre: Double
-        let inkAbove: Double
-        let inkBelow: Double
+        /// Gap between the badge's bottom and the label's top.
+        let badgeGap: Double
     }
     var measures: [ButtonMeasure] = []
 
@@ -735,7 +755,29 @@ func checkAlignment() -> (passed: Bool, details: String) {
 
         let pillRun = runs.last ?? 0...0
         let labelRun = runs.filter { $0.upperBound < pillRun.lowerBound }.last ?? 0...0
-        let above = runs.filter { $0.upperBound < labelRun.lowerBound }
+
+        // The icon badge is found from *ink* runs in the button's own centre column, not from
+        // the bright runs above: the tiles are transparent at rest, so the only ink in a button
+        // is the badge, the label and the pill, and the badge is the run above the label. The
+        // badge's fill is dimmer than white for the four neutral badges but brighter for the
+        // accented primary one, so a brightness threshold would find the badge for one button
+        // and only the glyph for the others.
+        let centreColumn = min(max(Int(centre * scale), 0), rep.pixelsWide - 1)
+        var inkRuns: [ClosedRange<Int>] = []
+        var inkStart = -1, inkLast = -1
+        for y in 0..<rep.pixelsHigh {
+            if differsFromBackdrop(centreColumn, y) {
+                if inkStart < 0 {
+                    inkStart = y
+                } else if y - inkLast > 4 {
+                    inkRuns.append(inkStart...inkLast)
+                    inkStart = y
+                }
+                inkLast = y
+            }
+        }
+        if inkStart >= 0 { inkRuns.append(inkStart...inkLast) }
+        let badgeRun = inkRuns.filter { $0.upperBound < labelRun.lowerBound }.last
 
         // The pill's *horizontal* centre: the check compares it with the button's centre,
         // the same axis as the icon centre.
@@ -747,41 +789,41 @@ func checkAlignment() -> (passed: Bool, details: String) {
         }
         let pillCentreX = pillLeft <= pillRight ? Double(pillLeft + pillRight) / 2 : 0
 
-        var iconTop = Int.max, iconBottom = Int.min, iconLeft = Int.max, iconRight = Int.min
-        for run in above {
-            for y in run {
-                for x in x0...x1 where brightPixelCount(rep, xRange: x...x, yRange: y...y, brightness: 0.4) > 0 {
-                    iconTop = min(iconTop, y); iconBottom = max(iconBottom, y)
-                    iconLeft = min(iconLeft, x); iconRight = max(iconRight, x)
+        // The badge's box (ink) and, inside it, the glyph's box: the glyph is white, so it is
+        // far brighter than either badge fill (the accent fill composites to ~0.41 luminance,
+        // the neutral one to ~0.28) and a high threshold isolates it.
+        var badgeLeft = Int.max, badgeRight = Int.min
+        var glyphLeft = Int.max, glyphRight = Int.min
+        if let badgeRun {
+            for y in badgeRun {
+                for x in x0...x1 {
+                    if differsFromBackdrop(x, y) {
+                        badgeLeft = min(badgeLeft, x); badgeRight = max(badgeRight, x)
+                    }
+                    if (pixelLuminance(rep, x, y) ?? 0) > alignmentGlyphBrightness {
+                        glyphLeft = min(glyphLeft, x); glyphRight = max(glyphRight, x)
+                    }
                 }
             }
         }
 
-        // The button's own box, sampled in its left padding where the centred pill cannot
-        // reach, so the ink gaps are measured inside the button rather than the column.
-        let edgeColumn = Int((left + 4) * scale)
-        var boxTop = -1, boxBottom = -1
-        for y in 0..<rep.pixelsHigh where differsFromBackdrop(edgeColumn, y) {
-            if boxTop < 0 { boxTop = y }
-            boxBottom = y
-        }
-
         if debugMode {
-            print("  debug alignment button \(index): runs=\(runs.map { "\($0.lowerBound)-\($0.upperBound)" }.joined(separator: " "))")
+            print("  debug alignment button \(index): brightRuns=\(runs.map { "\($0.lowerBound)-\($0.upperBound)" }.joined(separator: " ")) " +
+                  "inkRuns=\(inkRuns.map { "\($0.lowerBound)-\($0.upperBound)" }.joined(separator: " ")) badge=\(badgeRun.map { "\($0.lowerBound)-\($0.upperBound)" } ?? "none")")
         }
-        guard iconLeft <= iconRight, boxTop >= 0, !runs.isEmpty else {
-            failures.append("button \(index): no icon ink found")
+        guard let badgeRun, badgeLeft <= badgeRight, glyphLeft <= glyphRight, !runs.isEmpty else {
+            failures.append("button \(index): no badge or glyph found")
             continue
         }
         measures.append(ButtonMeasure(index: index,
                                       centre: centre * scale,
-                                      iconWidth: iconRight - iconLeft + 1,
-                                      iconCentreX: Double(iconLeft + iconRight) / 2,
-                                      iconCentreY: Double(iconTop + iconBottom) / 2,
+                                      badgeWidth: badgeRight - badgeLeft + 1,
+                                      badgeCentreX: Double(badgeLeft + badgeRight) / 2,
+                                      badgeCentreY: Double(badgeRun.lowerBound + badgeRun.upperBound) / 2,
+                                      glyphWidth: glyphRight - glyphLeft + 1,
                                       labelTop: labelRun.lowerBound,
                                       pillCentre: pillCentreX,
-                                      inkAbove: (Double(iconTop) - Double(boxTop)) / scale,
-                                      inkBelow: (Double(boxBottom) - Double(labelRun.upperBound)) / scale))
+                                      badgeGap: (Double(labelRun.lowerBound) - Double(badgeRun.upperBound)) / scale))
     }
 
     guard measures.count == 5 else {
@@ -797,19 +839,26 @@ func checkAlignment() -> (passed: Bool, details: String) {
         }
     }
 
-    let widths = measures.map(\.iconWidth)
+    let widths = measures.map(\.badgeWidth)
     let spread = (widths.max() ?? 0) - (widths.min() ?? 0)
-    entry("iconWidthSpread", spread <= alignmentIconWidthSpreadLimit,
+    entry("badgeWidthSpread", spread <= alignmentIconWidthSpreadLimit,
           "spread=\(spread)px widths=\(widths.map(String.init).joined(separator: "/")) limit=\(alignmentIconWidthSpreadLimit)")
 
-    let centreOffsets = measures.map { abs($0.iconCentreX - $0.centre) }
+    // The glyph inside each badge: the badge is uniform by construction, so this is what still
+    // guards the per-symbol point-size table (all five glyphs the same ink width).
+    let glyphWidths = measures.map(\.glyphWidth)
+    let glyphSpread = (glyphWidths.max() ?? 0) - (glyphWidths.min() ?? 0)
+    entry("glyphWidthSpread", glyphSpread <= alignmentIconWidthSpreadLimit,
+          "spread=\(glyphSpread)px widths=\(glyphWidths.map(String.init).joined(separator: "/")) limit=\(alignmentIconWidthSpreadLimit)")
+
+    let centreOffsets = measures.map { abs($0.badgeCentreX - $0.centre) }
     let worstCentre = centreOffsets.max() ?? 0
-    entry("iconCentres", worstCentre <= Double(alignmentIconCentreTolerance),
+    entry("badgeCentres", worstCentre <= Double(alignmentIconCentreTolerance),
           String(format: "worst=%.1fpx limit=%d", worstCentre, alignmentIconCentreTolerance))
 
-    let meanIconY = measures.map(\.iconCentreY).reduce(0, +) / 5
-    let worstIconY = measures.map { abs($0.iconCentreY - meanIconY) }.max() ?? 0
-    entry("iconRow", worstIconY <= Double(alignmentRowTolerance),
+    let meanIconY = measures.map(\.badgeCentreY).reduce(0, +) / 5
+    let worstIconY = measures.map { abs($0.badgeCentreY - meanIconY) }.max() ?? 0
+    entry("badgeRow", worstIconY <= Double(alignmentRowTolerance),
           String(format: "meanY=%.1f worst=%.1fpx limit=%d", meanIconY, worstIconY, alignmentRowTolerance))
 
     let meanLabelTop = Double(measures.map(\.labelTop).reduce(0, +)) / 5
@@ -817,13 +866,16 @@ func checkAlignment() -> (passed: Bool, details: String) {
     entry("labelRow", worstLabelTop <= Double(alignmentRowTolerance),
           String(format: "meanTop=%.1f worst=%.1fpx limit=%d", meanLabelTop, worstLabelTop, alignmentRowTolerance))
 
-    let balances = measures.map { abs($0.inkAbove - $0.inkBelow) }
-    let worstBalance = balances.max() ?? 0
-    let aboveList = measures.map { String(format: "%.1f", $0.inkAbove) }.joined(separator: "/")
-    let belowList = measures.map { String(format: "%.1f", $0.inkBelow) }.joined(separator: "/")
-    entry("inkBalance", worstBalance <= alignmentInkBalanceTolerance,
-          String(format: "worst=%.1fpt limit=%.0f", worstBalance, alignmentInkBalanceTolerance)
-          + " above=\(aboveList) below=\(belowList)")
+    // `inkBalance` used to measure how centred the icon+label block sat inside the tile's own
+    // fill; the tiles have no fill any more (the reference's rows are transparent), so that box
+    // no longer exists. The equivalent guard is the badge-to-label gap, which has to be the same
+    // in all five buttons for the row to look evenly spaced.
+    let gaps = measures.map(\.badgeGap)
+    let worstGap = (gaps.max() ?? 0) - (gaps.min() ?? 0)
+    let gapList = gaps.map { String(format: "%.1f", $0) }.joined(separator: "/")
+    entry("badgeGap", worstGap <= alignmentInkBalanceTolerance,
+          String(format: "worst=%.1fpt limit=%.0f", worstGap, alignmentInkBalanceTolerance)
+          + " gaps=\(gapList)")
 
     let pillOffsets = measures.map { abs($0.pillCentre - $0.centre) }
     let worstPill = pillOffsets.max() ?? 0
@@ -1234,66 +1286,44 @@ func readTileSource() -> String? {
     return String(tail)
 }
 
-/// The two branches of `vizGlassControl` in `Viz/Logic/VizColors.swift`: the shipping branch
-/// (macOS 26+ interactive glass) and the material fallback below it.
-func readGlassControlBranches() -> (shipping: String, fallback: String)? {
-    guard let source = try? String(contentsOfFile: "\(rootPath)/Viz/Logic/VizColors.swift", encoding: .utf8) else {
-        return nil
-    }
-    guard let start = source.range(of: "func vizGlassControl(") else { return nil }
-    let tail = source[start.lowerBound...]
-    guard let split = tail.range(of: "} else {") else { return nil }
-    let fallbackBody = tail[split.upperBound...]
-    // Bound the fallback branch at its own closing brace (eight spaces of indentation), so the
-    // helpers declared after it cannot leak into the scan.
-    let end = fallbackBody.range(of: "\n        }") ?? fallbackBody.range(of: "\n    }")
-    return (String(tail[..<split.lowerBound]),
-            end.map { String(fallbackBody[..<$0.lowerBound]) } ?? String(fallbackBody))
-}
-
-/// Peak luminance of the material fallback tile's top hairline over the dark backdrop, at
-/// rest. Measured 0.2165 for the single 0.10-primary hairline the tile keeps in the fallback,
-/// and 0.3966 for the same hairline at 0.35 - so the ceiling below separates "a subtle edge"
-/// from "an edge turned into a stroke". The hand-made ring the tile used to draw is not
-/// visible here at all: this render applies `vizGlassControl` alone, without the button style
-/// that drew the ring (measured: restoring it left this value unchanged at 0.2165), which is
-/// why `tileRing` is asserted from the source instead.
-let tileEdgeRestCeiling = 0.26
-
-/// The tile corner radius this design documents (the native-chrome changes, recorded in
-/// BUILDING.md). The harness carries the value on purpose: a widened tile corner has to fail
-/// the check instead of shipping quietly, and this is the one number here that is a copy.
-let tileCornerRadiusDocumented: CGFloat = 11
+/// The tile corner radius this design documents - the native reference's hovered row measures
+/// ~14 px (5-7 pt). The harness carries the value on purpose: a widened tile corner has to fail
+/// the check instead of shipping quietly, and this is the number here that is a copy.
+let tileCornerRadiusDocumented: CGFloat = 6
 /// How far the app's constant may sit from the documented radius before that is a real change.
 let tileCornerRadiusTolerance: CGFloat = 0.5
-/// Rendered corner geometry of the fallback tile: how much of the tile is missing 4 pt inside
-/// its left edge, and how far the first row of the edge starts in from the left edge (both in
-/// points). Measured 2.0 pt and 6.5 pt for the documented 11 pt corner (2.5 and 7.5 at 12 pt),
-/// while the old 16 pt chamfer lands at 5.0 pt - so the ceilings below catch a looser corner.
-let tileCornerDepthCeiling = 3.5
-let tileCornerInsetCeiling = 9.0
+/// Rendered corner geometry of the tile's hover highlight: how much of the highlight is missing
+/// 2 pt inside its left edge (the corner depth) and how far its first row starts in from that
+/// edge (the inset), both in points. Measured: the 6 pt reference corner gives 1.0 pt and
+/// 2.5 pt, the 11 pt corner this replaced gives 4.0 and 6.5, and the 16 pt chamfer 7.5 and 11.0 -
+/// so the ceilings below separate the reference's corner from both of those.
+let tileCornerDepthCeiling = 2.0
+let tileCornerInsetCeiling = 4.0
+/// How far the rendered rest/hover fill may sit from what it should be, per channel in 255ths.
+/// The rest fill is fully transparent and must equal the harness backdrop; the hover fill is the
+/// system's opaque selection colour and must equal it.
+let tileFillTolerance = 2.0
 
 // --- native tiles -----------------------------------------------------------
 
-/// The popover tiles must behave the way a system control does: one continuous corner at the
-/// documented radius, no press scaling, no hand-made ring over the glass, and a hover cue that
-/// is no more than a brightening of the fallback's own edge.
+/// The popover tile must be the reference's row: nothing at rest, the system's selection colour
+/// while hovered at the reference's corner, no press scaling and no hand-made ring.
 ///
 /// The entries mix three kinds of evidence, and each value string says which:
 ///  * the app's own constants and shape API (`VizTheme.cornerControl`, `VizTheme.controlShape`,
 ///    `RoundedRectangleButtonStyle.hoverDuration`) plus the radius the design documents - a
 ///    value drift or a widened radius fails the entry by name;
-///  * rendered measurements of the material fallback tile, the only tile this process can
-///    capture (see `VizTheme.useMaterialFallback`): the hairline's brightness and the corner
-///    geometry the tile actually draws;
-///  * source-level assertions on `Viz/Styles.swift` and `Viz/Logic/VizColors.swift` for the two
-///    cues that exist only as code: a press-dependent transform and a stroke ring.
+///  * rendered measurements of the real tile (a `Button` with the real button style) over the
+///    dark backdrop: the fill inside the tile at rest and hovered, and the corner geometry of
+///    the hover highlight;
+///  * source-level assertions on `Viz/Styles.swift` for the cues that exist only as code: a
+///    press-dependent transform and a drawn ring.
 ///
-/// NOT covered: the macOS 26+ Liquid Glass rendering. Offscreen captures cannot rasterise it
-/// (a glass background wipes the siblings drawn before it), so the tile's real hover and press
-/// response - the interactive glass itself - is never rendered here, and no static capture can
-/// press a control. What is asserted instead is that the tile hands that response to the glass
-/// and draws nothing of its own in the shipping branch.
+/// NOT covered: the tile's hover *state* cannot be produced offscreen (nothing can be hovered in
+/// a static capture), so the hover fill is rendered by applying the same helper the style uses
+/// with `hovered: true`; and the panel's own material cannot be photographed at all (a
+/// behind-window sample is resolved by the WindowServer). The badge's geometry and colours are
+/// the checks task's business.
 func checkNativeTiles() -> (passed: Bool, details: String) {
     var failures: [String] = []
     var entries: [String] = []
@@ -1305,19 +1335,18 @@ func checkNativeTiles() -> (passed: Bool, details: String) {
     }
 
     let tile = readTileSource()
-    let branches = readGlassControlBranches()
 
     // 1. The shape the tile draws: the app's constant, the shape built from it, the tile's own
     //    call sites, and the radius the design documents.
     let shape = VizTheme.controlShape()
     let usesConstant = shape.cornerSize.width == VizTheme.cornerControl
-    let callSites = (tile?.contains(".vizGlassControl(cornerRadius: VizTheme.cornerControl") ?? false)
+    let callSites = (tile?.contains(".vizTileHighlight(cornerRadius: VizTheme.cornerControl") ?? false)
         && (tile?.contains(".clipShape(VizTheme.controlShape())") ?? false)
     let documentedRadius = abs(VizTheme.cornerControl - tileCornerRadiusDocumented) <= tileCornerRadiusTolerance
     entry("tileCornerRadius", usesConstant && callSites && documentedRadius,
           "shape \(shape.cornerSize.width) == VizTheme.cornerControl (\(VizTheme.cornerControl)), " +
           "documented \(tileCornerRadiusDocumented) +/- \(tileCornerRadiusTolerance), " +
-          "tile call sites=" + (callSites ? "glass+clip" : "MISSING in \(tile == nil ? "unreadable source" : "Viz/Styles.swift")"))
+          "tile call sites=" + (callSites ? "highlight+clip" : "MISSING in \(tile == nil ? "unreadable source" : "Viz/Styles.swift")"))
     entry("tileCornerCurve", shape.style == .continuous,
           shape.style == .continuous ? "continuous" : "circular")
 
@@ -1326,86 +1355,121 @@ func checkNativeTiles() -> (passed: Bool, details: String) {
     entry("tileHoverDuration", hover >= 0.10 && hover <= 0.20,
           String(format: "%.2fs, inside the system's 0.10-0.20s band", hover))
 
-    // 3. Rendered: the tile the app draws in the fallback, over the dark backdrop the harness
-    //    uses. The tile is 108x34 pt centred in 140x48, so it spans x=16...124, y=7...41.
-    let tileSize = NSSize(width: 140, height: 48)
-    let tileLeft = 16.0, tileTop = 7.0
+    // 3. Rendered: the real tile - a `Button` with the real button style - over the dark
+    //    backdrop the harness uses, at rest and with the style's hover helper applied. The
+    //    hover *state* cannot be driven offscreen, so the helper is applied by hand for the
+    //    hovered render; the helper, the corner and the fill are the ones the style uses.
+    let canvas = NSSize(width: 200, height: 110)
     func renderTile(hovered: Bool) -> NSBitmapImageRep? {
+        let tile = Button("Capture") {}
+            .buttonStyle(RoundedRectangleButtonStyle(image: "viewfinder", size: 15, primary: true))
+            .vizTileHighlight(cornerRadius: VizTheme.cornerControl, hovered: hovered)
         let root = ZStack {
             Color(nsColor: Backdrop.dark)
-            VStack { Image(systemName: "viewfinder").font(.system(size: 16)) }
-                .frame(width: 108, height: 34)
-                .vizGlassControl(hovered: hovered)
+            tile
         }
-        .frame(width: tileSize.width, height: tileSize.height)
-        return renderView(root, size: tileSize, scheme: .dark,
+        .frame(width: canvas.width, height: canvas.height)
+        return renderView(root, size: canvas, scheme: .dark,
                           pngName: "nativetiles-\(hovered ? "hovered" : "rest").png",
                           backdrop: Backdrop.dark, windowBackdrop: Backdrop.dark)
     }
-    func edgePeak(_ rep: NSBitmapImageRep) -> Double {
-        let scale = Double(rep.pixelsWide) / Double(tileSize.width)
-        var peak = 0.0
-        for y in Int((tileTop + 0) * scale)..<Int((tileTop + 2) * scale) {
-            for x in Int((tileLeft + 4) * scale)..<Int((tileLeft + 104) * scale) {
-                peak = max(peak, pixelLuminance(rep, x, y) ?? 0)
+    let backdrop = Backdrop.dark.usingColorSpace(.deviceRGB) ?? .black
+    func ink(_ rep: NSBitmapImageRep, _ x: Int, _ y: Int) -> Bool {
+        guard let c = rep.colorAt(x: x, y: y)?.usingColorSpace(.deviceRGB) else { return false }
+        return abs(c.redComponent - backdrop.redComponent) * 255 > 2
+            || abs(c.greenComponent - backdrop.greenComponent) * 255 > 2
+            || abs(c.blueComponent - backdrop.blueComponent) * 255 > 2
+    }
+    /// The box of everything the tile draws, used as the tile's own frame.
+    func tileBox(_ rep: NSBitmapImageRep) -> (left: Int, right: Int, top: Int, bottom: Int)? {
+        var left = Int.max, right = Int.min, top = Int.max, bottom = Int.min
+        for y in 0..<rep.pixelsHigh {
+            for x in 0..<rep.pixelsWide where ink(rep, x, y) {
+                left = min(left, x); right = max(right, x); top = min(top, y); bottom = max(bottom, y)
             }
         }
-        return peak
+        return left <= right ? (left, right, top, bottom) : nil
     }
-    /// How much of the tile is missing at 4 pt inside its left edge (the corner depth) and how
-    /// far the tile's first row starts in from that edge (the corner inset).
-    func cornerGeometry(_ rep: NSBitmapImageRep) -> (depth: Double, inset: Double)? {
-        let scale = Double(rep.pixelsWide) / Double(tileSize.width)
-        let backdrop = Backdrop.dark.usingColorSpace(.deviceRGB) ?? .black
-        func ink(_ x: Int, _ y: Int) -> Bool {
-            guard let c = rep.colorAt(x: x, y: y)?.usingColorSpace(.deviceRGB) else { return false }
-            return abs(c.redComponent - backdrop.redComponent) * 255 > 2
-                || abs(c.greenComponent - backdrop.greenComponent) * 255 > 2
-                || abs(c.blueComponent - backdrop.blueComponent) * 255 > 2
+    func meanColor(_ rep: NSBitmapImageRep, xRange: ClosedRange<Int>, yRange: ClosedRange<Int>) -> (r: Double, g: Double, b: Double)? {
+        var r = 0.0, g = 0.0, b = 0.0, n = 0.0
+        for y in yRange {
+            for x in xRange {
+                guard let c = rep.colorAt(x: x, y: y)?.usingColorSpace(.deviceRGB) else { continue }
+                r += c.redComponent; g += c.greenComponent; b += c.blueComponent; n += 1
+            }
         }
-        func firstRow(at x: Int) -> Int? { (0..<rep.pixelsHigh).first { ink(x, $0) } }
-        let centre = Int((tileLeft + 54) * scale)
-        guard let top = firstRow(at: centre), let insideCorner = firstRow(at: Int((tileLeft + 4) * scale)) else {
-            return nil
-        }
-        let row = min(top + 1, rep.pixelsHigh - 1)
+        return n > 0 ? (r / n, g / n, b / n) : nil
+    }
+    /// How much of the highlight is missing 2 pt inside its left edge (depth) and how far its
+    /// first row starts in from that edge (inset), both in points. 2 pt inside is where a 6 pt
+    /// corner still cuts in measurably; further in, every radius in play reaches the straight
+    /// edge and the depth reads 0.
+    func cornerGeometry(_ rep: NSBitmapImageRep, box: (left: Int, right: Int, top: Int, bottom: Int)) -> (depth: Double, inset: Double) {
+        func firstRow(at x: Int) -> Int? { (box.top..<(box.bottom + 1)).first { ink(rep, x, $0) } }
+        let centre = (box.left + box.right) / 2
+        guard let top = firstRow(at: centre),
+              let insideCorner = firstRow(at: box.left + 4) else { return (0, 0) }
+        let row = min(top + 1, box.bottom)
         var inset = 0.0
-        if let first = (Int((tileLeft - 2) * scale)..<centre).first(where: { ink($0, row) }) {
-            inset = Double(first) / scale - tileLeft
+        if let first = (box.left..<centre).first(where: { ink(rep, $0, row) }) {
+            inset = Double(first - box.left) / 2.0
         }
-        return (Double(insideCorner - top) / scale, inset)
+        return (Double(insideCorner - top) / 2.0, inset)
     }
-    if let rest = renderTile(hovered: false), let hoveredRep = renderTile(hovered: true) {
-        let restPeak = edgePeak(rest)
-        let hoveredPeak = edgePeak(hoveredRep)
-        entry("tileFallbackEdge", restPeak <= tileEdgeRestCeiling && hoveredPeak > restPeak + 0.02,
-              String(format: "rest=%.4f (ceiling %.2f) hovered=%.4f (must rise)", restPeak, tileEdgeRestCeiling, hoveredPeak))
-        if let geometry = cornerGeometry(rest) {
-            entry("tileCornerRendered",
-                  geometry.depth <= tileCornerDepthCeiling && geometry.inset <= tileCornerInsetCeiling,
-                  String(format: "depth=%.1fpt (ceiling %.1f) inset=%.1fpt (ceiling %.1f)",
-                         geometry.depth, tileCornerDepthCeiling, geometry.inset, tileCornerInsetCeiling))
-        } else {
-            entry("tileCornerRendered", false, "the tile's corner could not be measured")
-        }
+    if let restRep = renderTile(hovered: false), let hoverRep = renderTile(hovered: true),
+       let restBox = tileBox(restRep), let hoverBox = tileBox(hoverRep) {
+        // The patch sits inside the tile, clear of the badge (which is centred and 27 pt wide)
+        // and clear of the rounded corner: 8-14 px in from the left edge, 30-36 px down.
+        let patchX = (hoverBox.left + 8)...(hoverBox.left + 14)
+        let patchY = (hoverBox.top + 30)...(hoverBox.top + 36)
+        let restMean = meanColor(restRep, xRange: patchX, yRange: patchY)
+        let hoverMean = meanColor(hoverRep, xRange: patchX, yRange: patchY)
+        let systemFill = NSColor.unemphasizedSelectedContentBackgroundColor.usingColorSpace(.deviceRGB)
+        let restIsBackdrop = restMean.map { mean in
+            [mean.r - Double(backdrop.redComponent), mean.g - Double(backdrop.greenComponent),
+             mean.b - Double(backdrop.blueComponent)].allSatisfy { abs($0) * 255 <= tileFillTolerance }
+        } ?? false
+        entry("tileRestFill", restIsBackdrop,
+              String(format: "inside the tile %d,%d,%d == backdrop %d,%d,%d (tolerance %.0f)",
+                     Int((restMean?.r ?? -1) * 255), Int((restMean?.g ?? -1) * 255), Int((restMean?.b ?? -1) * 255),
+                     Int(backdrop.redComponent * 255), Int(backdrop.greenComponent * 255),
+                     Int(backdrop.blueComponent * 255), tileFillTolerance))
+        let hoverMatchesSystem = hoverMean.map { mean in
+            guard let systemFill else { return false }
+            return abs(mean.r - Double(systemFill.redComponent)) * 255 <= tileFillTolerance
+                && abs(mean.g - Double(systemFill.greenComponent)) * 255 <= tileFillTolerance
+                && abs(mean.b - Double(systemFill.blueComponent)) * 255 <= tileFillTolerance
+        } ?? false
+        let hoverRose = (hoverMean.flatMap { mean -> Double? in
+            guard let restMean else { return nil }
+            return [mean.r - restMean.r, mean.g - restMean.g, mean.b - restMean.b].min().map { $0 * 255 }
+        } ?? 0) >= 20
+        entry("tileHoverFill", hoverMatchesSystem && hoverRose,
+              String(format: "hovered %d,%d,%d == unemphasizedSelectedContentBackgroundColor %d,%d,%d (tolerance %.0f), rose by >=20 over rest",
+                     Int((hoverMean?.r ?? -1) * 255), Int((hoverMean?.g ?? -1) * 255), Int((hoverMean?.b ?? -1) * 255),
+                     Int((systemFill?.redComponent ?? -1) * 255), Int((systemFill?.greenComponent ?? -1) * 255),
+                     Int((systemFill?.blueComponent ?? -1) * 255), tileFillTolerance))
+
+        let geometry = cornerGeometry(hoverRep, box: hoverBox)
+        entry("tileCornerRendered",
+              geometry.depth <= tileCornerDepthCeiling && geometry.inset <= tileCornerInsetCeiling,
+              String(format: "depth=%.1fpt (ceiling %.1f) inset=%.1fpt (ceiling %.1f)",
+                     geometry.depth, tileCornerDepthCeiling, geometry.inset, tileCornerInsetCeiling))
     } else {
-        entry("tileFallbackEdge", false, "render failed")
+        entry("tileRestFill", false, "render failed")
+        entry("tileHoverFill", false, "render failed")
         entry("tileCornerRendered", false, "render failed")
     }
 
-    // 4. Source level: the tile reads no press state and draws no ring of its own, and the
-    //    only stroke in the control path is the fallback's hairline.
+    // 4. Source level: the tile reads no press state and draws no ring of its own.
     let pressFree = tile.map { !$0.contains("isPressed") && !$0.contains("scaleEffect") } ?? false
     entry("tilePressScale", pressFree,
           pressFree ? "1.0, the tile's body reads no press state"
                     : "the tile body presses/scales again (\(tile == nil ? "unreadable source" : "Viz/Styles.swift"))")
 
     let tileHasRing = tile.map { $0.contains("strokeBorder") || $0.contains("overlay(") } ?? true
-    let shippingRing = branches?.shipping.contains("strokeBorder") ?? true
-    let fallbackStrokes = branches.map { $0.fallback.components(separatedBy: "strokeBorder").count - 1 } ?? -1
-    let ringFree = !tileHasRing && !shippingRing && fallbackStrokes == 1
-    entry("tileRing", ringFree,
-          "tile=\(tileHasRing ? "ring" : "none") shippingBranch=\(shippingRing ? "ring" : "none") fallbackStrokes=\(fallbackStrokes)")
+    entry("tileRing", !tileHasRing,
+          "tile=\(tileHasRing ? "ring" : "none") (the hover highlight is a fill, not a stroke)")
 
     let details = entries.joined(separator: " ") + (failures.isEmpty ? "" : " -> failed: \(failures.joined(separator: ", "))")
     return (failures.isEmpty, details)
@@ -2011,14 +2075,23 @@ func checkDesign() -> (passed: Bool, details: String) {
             // template image has no colour to measure). VizTheme.success is still used by
             // the History copy confirmation.
 
-            // The popover action buttons must stay neutral: the accent belongs to the title
-            // gradient, the update indicator and the system-tinted controls only.
+            // The button row carries exactly one accent: the reference's filled badge on the
+            // popover's primary action. Every other badge, and the rest of the band, stays
+            // neutral - the accent belongs to that badge, the update indicator and the
+            // system-tinted controls only.
             if surface == .popover {
                 let band = buttonBand(rendered.rep)
+                let scale = Double(rendered.rep.pixelsWide) / contentWidth
                 let measured = accentShare(rendered.rep, xRange: 0...(rendered.rep.pixelsWide - 1), yRange: band)
-                summaries[summaries.count - 1] += String(format: " buttons=%.2f%%", measured.share * 100)
+                let primaryEnd = min(Int((buttonColumnWidth + buttonColumnGap) * scale), rendered.rep.pixelsWide - 1)
+                let neutral = accentShare(rendered.rep, xRange: primaryEnd...(rendered.rep.pixelsWide - 1), yRange: band)
+                summaries[summaries.count - 1] += String(format: " buttons=%.2f%% neutralColumns=%.2f%%",
+                                                         measured.share * 100, neutral.share * 100)
                 if measured.share > buttonAccentShareLimit {
                     failures.append("\(label):buttons accent=\(String(format: "%.1f%%", measured.share * 100)) (limit \(String(format: "%.1f%%", buttonAccentShareLimit * 100)))")
+                }
+                if neutral.share > buttonAccentShareLimitNeutralColumns {
+                    failures.append("\(label):buttons the neutral columns carry accent (\(String(format: "%.2f%%", neutral.share * 100)) > \(String(format: "%.2f%%", buttonAccentShareLimitNeutralColumns * 100)))")
                 }
 
                 // The shortcut hints must be bright (primary label colour), not .secondary.

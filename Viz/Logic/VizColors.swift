@@ -43,19 +43,39 @@ enum VizTheme {
     static let cornerLarge: CGFloat = 22
     static let cornerMedium: CGFloat = 16
     static let cornerSmall: CGFloat = 10
-    /// Control tiles (the popover action buttons). 11 pt, down from the 16 pt these tiles
-    /// used: 11 pt is the value taken from the system's control family for a tile of this
-    /// size, which the on-screen comparison against AppKit's own controls checks. It is used
-    /// everywhere the tile's corner appears - the glass shape, the fallback's fill and edge,
-    /// and the tile's clip - so the two rendering paths cannot drift apart.
-    static let cornerControl: CGFloat = 11
-    /// The tile's shape, defined once so the glass, the material fallback behind it and the
-    /// clip that trims the tile all draw the same rectangle. The continuous (squircle) curve
-    /// is stated explicitly rather than left to `RoundedRectangle`'s default: the app deploys
-    /// back to macOS 13 and that default is not the same across the range - the current SDK
-    /// already defaults to continuous, older ones default to circular.
+    /// The popover tile's corner. The native reference's hovered row measures ~14 px (5-7 pt)
+    /// in the screenshot, and 6 pt is that value: it is used for the tile's hover highlight
+    /// and for the clip that trims the tile.
+    static let cornerControl: CGFloat = 6
+    /// The tile's shape, defined once so the hover highlight and the clip that trims the tile
+    /// draw the same rectangle. The continuous (squircle) curve is stated explicitly rather
+    /// than left to `RoundedRectangle`'s default: the app deploys back to macOS 13 and that
+    /// default is not the same across the range - the current SDK already defaults to
+    /// continuous, older ones default to circular.
     static func controlShape(radius: CGFloat = cornerControl) -> RoundedRectangle {
         RoundedRectangle(cornerRadius: radius, style: .continuous)
+    }
+
+    /// The tile icon's badge: the reference's 54 px (27 pt) circle, mine at 52 px, so 27 pt.
+    static let badgeDiameter: CGFloat = 27
+    /// The badge's fill. The reference has exactly two states: a vivid blue for the connected
+    /// (primary) item and a neutral grey for the rest. Both are semantic: the system accent
+    /// (`controlAccentColor`, 0,122,255 here against the reference's measured 0,147,255) and,
+    /// for the neutral state, `quaternaryLabelColor` - white at 10 % over a panel of the
+    /// reference's own tone (51,52,55) composites to 71,72,75 against the reference's measured
+    /// 65,66,70. (`secondarySystemFill` measures 67,68,71, closer, but it is macOS 14+ and this
+    /// app deploys to macOS 13; the difference is 5-6 units in one grey step.)
+    static func badgeFill(primary: Bool) -> Color {
+        primary ? Color(nsColor: .controlAccentColor) : Color(nsColor: .quaternaryLabelColor)
+    }
+    /// The badge glyph's colour. White on the accent badge, exactly as the reference draws the
+    /// connected item. On the neutral badge the reference's glyph measures as a lighter grey
+    /// than its fill, and the label colour is that colour in dark appearance (white at 85 %,
+    /// compositing to 224) - and, crucially, it inverts in light appearance (black at 85 % on
+    /// the light neutral fill), where a fixed white glyph would measure 1.4:1 contrast and
+    /// vanish. The port keeps light and dark working instead of hard-coding white.
+    static func badgeGlyph(primary: Bool) -> Color {
+        primary ? .white : Color(nsColor: .labelColor)
     }
 
     /// When true the helpers use their translucent-material fallback even on macOS 26+.
@@ -127,29 +147,23 @@ extension View {
         }
     }
 
-    /// Neutral glass control surface: no accent tint, just the material. Used by the
-    /// popover action buttons, which must stay grey so the blue accent keeps meaning.
+    /// The popover tile's own surface, ported from the reference: **nothing at rest** - the
+    /// reference's rows carry no fill, so the panel's material shows through - and the system's
+    /// unemphasized selection fill while hovered, which the reference's hovered row measures
+    /// 71,76,86 for. The fill is `unemphasizedSelectedContentBackgroundColor` (a flat grey: 70,70,70
+    /// over a dark panel, 220,220,220 over a light one, both fully opaque) so the highlight is
+    /// the system's own colour in either appearance.
     ///
-    /// The corners are the system's continuous curve in both paths. On macOS 26+ the tile's
-    /// hover and press response is the glass itself - `glassEffect(.regular.interactive())`
-    /// reacts the way the platform's controls do - so nothing is drawn over it and `hovered`
-    /// is unused there. The material fallback (macOS 13-25, and the render harness, which
-    /// cannot rasterise glass offscreen) has no interactive glass, so it keeps the one
-    /// hairline that makes a bare material tile read as a control, and `hovered` only moves
-    /// that hairline: a brightening of the existing edge, never a ring on top of glass.
+    /// This replaces the interactive glass the tile used to sit on: the reference's selected row
+    /// is a plain system highlight, not a glass layer, and glass is what made our row look like a
+    /// different family. The corner is the continuous reference radius above.
     @ViewBuilder
-    func vizGlassControl(cornerRadius: CGFloat = VizTheme.cornerControl, hovered: Bool = false) -> some View {
-        let shape = VizTheme.controlShape(radius: cornerRadius)
-        if #available(macOS 26.0, *), !VizTheme.useMaterialFallback {
-            self.background {
-                Color.clear.glassEffect(.regular.interactive(), in: shape)
+    func vizTileHighlight(cornerRadius: CGFloat = VizTheme.cornerControl, hovered: Bool) -> some View {
+        self.background {
+            if hovered {
+                VizTheme.controlShape(radius: cornerRadius)
+                    .fill(Color(nsColor: .unemphasizedSelectedContentBackgroundColor))
             }
-        } else {
-            self
-                .background(.ultraThinMaterial, in: shape)
-                .overlay(
-                    shape.strokeBorder(Color.primary.opacity(hovered ? 0.16 : 0.10), lineWidth: 1)
-                )
         }
     }
 
