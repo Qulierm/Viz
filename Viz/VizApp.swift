@@ -122,6 +122,18 @@ final class StatusItemController: NSObject {
     /// panel resigns key first, we dismiss it, and the action would then reopen it. Do not
     /// reopen inside this window - a later click opens the popover normally.
     static let toggleSuppressionWindow: TimeInterval = 0.3
+
+    /// Native panel chrome. AppKit exposes no API for the system's panel radius, so this
+    /// follows the radius family the system's own menu-bar panels use on this OS generation
+    /// and was chosen by comparing the panel against them; the curve is the system's
+    /// continuous (squircle) curve rather than the default circular one, and the 0.5 pt edge
+    /// is the separator hairline native panels draw instead of a coloured stroke.
+    static let panelCornerRadius: CGFloat = 16
+    static let panelBorderWidth: CGFloat = 0.5
+    /// The panel's appearance animation: short, so it reads as the system's own pace. The
+    /// dismissal is deliberately immediate - an animated dismissal would leave `isVisible`
+    /// true while it runs, which would break the toggle and suppression semantics.
+    static let panelAppearDuration: TimeInterval = 0.12
     /// When the panel was last shown, used for the grace period.
     private var shownAt: Date?
     /// When the panel was last dismissed, used for the toggle suppression window.
@@ -138,6 +150,15 @@ final class StatusItemController: NSObject {
     var ignoresToggleSuppression = false
 
     private var updaterCancellable: AnyCancellable?
+
+    /// The system setting that turns animations off; the panel's appearance respects it.
+    var reducesMotion: Bool { NSWorkspace.shared.accessibilityDisplayShouldReduceMotion }
+    /// Test hook: overrides the system Reduce Motion setting, which cannot be changed from
+    /// inside the process, so the harness can exercise both appearance paths.
+    var reducesMotionOverride: Bool?
+
+    /// The appearance path the next show will take.
+    var shouldReduceMotion: Bool { reducesMotionOverride ?? reducesMotion }
 
     /// The popover content, kept in one place so its size and environment match the app.
     @ViewBuilder
@@ -285,8 +306,30 @@ final class StatusItemController: NSObject {
         shownAt = Date()
         guard !recordsPresentationOnly else { return }
         guard let panel else { return }
-        panel.setFrame(panelFrame(for: panel.frame.size), display: true)
+        let target = panelFrame(for: panel.frame.size)
+        let reduceMotion = shouldReduceMotion
+        if reduceMotion {
+            panel.alphaValue = 1
+            panel.setFrame(target, display: true)
+        } else {
+            // A short fade with a hair of scale, the way the system's own panels arrive.
+            var start = target
+            start.origin.x += target.width * 0.01
+            start.origin.y += target.height * 0.01
+            start.size.width *= 0.98
+            start.size.height *= 0.98
+            panel.alphaValue = 0
+            panel.setFrame(start, display: false)
+        }
         panel.makeKeyAndOrderFront(nil)
+        if !reduceMotion {
+            NSAnimationContext.runAnimationGroup { context in
+                context.duration = Self.panelAppearDuration
+                context.timingFunction = CAMediaTimingFunction(name: .easeOut)
+                panel.animator().setFrame(target, display: true)
+                panel.animator().alphaValue = 1
+            }
+        }
         installClickAwayMonitor()
     }
 
@@ -369,8 +412,12 @@ final class StatusItemController: NSObject {
         effect.blendingMode = .behindWindow
         effect.state = .active
         effect.wantsLayer = true
-        effect.layer?.cornerRadius = 12
+        effect.layer?.cornerCurve = .continuous
+        effect.layer?.cornerRadius = Self.panelCornerRadius
         effect.layer?.masksToBounds = true
+        // The system's own panel edge: a half-point separator hairline, not a stroke.
+        effect.layer?.borderWidth = Self.panelBorderWidth
+        effect.layer?.borderColor = NSColor.separatorColor.cgColor
         effect.autoresizingMask = [.width, .height]
 
         let hosting = NSHostingView(rootView: popoverContent)
