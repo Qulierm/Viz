@@ -43,6 +43,20 @@ enum VizTheme {
     static let cornerLarge: CGFloat = 22
     static let cornerMedium: CGFloat = 16
     static let cornerSmall: CGFloat = 10
+    /// Control tiles (the popover action buttons). 11 pt, down from the 16 pt these tiles
+    /// used: 11 pt is the value taken from the system's control family for a tile of this
+    /// size, which the on-screen comparison against AppKit's own controls checks. It is used
+    /// everywhere the tile's corner appears - the glass shape, the fallback's fill and edge,
+    /// and the tile's clip - so the two rendering paths cannot drift apart.
+    static let cornerControl: CGFloat = 11
+    /// The tile's shape, defined once so the glass, the material fallback behind it and the
+    /// clip that trims the tile all draw the same rectangle. The continuous (squircle) curve
+    /// is stated explicitly rather than left to `RoundedRectangle`'s default: the app deploys
+    /// back to macOS 13 and that default is not the same across the range - the current SDK
+    /// already defaults to continuous, older ones default to circular.
+    static func controlShape(radius: CGFloat = cornerControl) -> RoundedRectangle {
+        RoundedRectangle(cornerRadius: radius, style: .continuous)
+    }
 
     /// When true the helpers use their translucent-material fallback even on macOS 26+.
     /// Only the render harness sets this: offscreen captures cannot rasterise several
@@ -115,18 +129,26 @@ extension View {
 
     /// Neutral glass control surface: no accent tint, just the material. Used by the
     /// popover action buttons, which must stay grey so the blue accent keeps meaning.
+    ///
+    /// The corners are the system's continuous curve in both paths. On macOS 26+ the tile's
+    /// hover and press response is the glass itself - `glassEffect(.regular.interactive())`
+    /// reacts the way the platform's controls do - so nothing is drawn over it and `hovered`
+    /// is unused there. The material fallback (macOS 13-25, and the render harness, which
+    /// cannot rasterise glass offscreen) has no interactive glass, so it keeps the one
+    /// hairline that makes a bare material tile read as a control, and `hovered` only moves
+    /// that hairline: a brightening of the existing edge, never a ring on top of glass.
     @ViewBuilder
-    func vizGlassControl(cornerRadius: CGFloat = VizTheme.cornerMedium) -> some View {
+    func vizGlassControl(cornerRadius: CGFloat = VizTheme.cornerControl, hovered: Bool = false) -> some View {
+        let shape = VizTheme.controlShape(radius: cornerRadius)
         if #available(macOS 26.0, *), !VizTheme.useMaterialFallback {
             self.background {
-                Color.clear.glassEffect(.regular.interactive(), in: .rect(cornerRadius: cornerRadius))
+                Color.clear.glassEffect(.regular.interactive(), in: shape)
             }
         } else {
             self
-                .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: cornerRadius))
+                .background(.ultraThinMaterial, in: shape)
                 .overlay(
-                    RoundedRectangle(cornerRadius: cornerRadius)
-                        .strokeBorder(Color.primary.opacity(0.10), lineWidth: 1)
+                    shape.strokeBorder(Color.primary.opacity(hovered ? 0.16 : 0.10), lineWidth: 1)
                 )
         }
     }

@@ -127,6 +127,11 @@ struct RoundedRectangleButtonStyle: ButtonStyle {
     /// labels below them start at the same y.
     private static let iconSlot = CGSize(width: 24, height: 18)
 
+    /// How long the tile's hover feedback takes (the fallback hairline brightening). The
+    /// system's own control feedback sits in the 0.1-0.15 s range, and it replaced a 0.3 s
+    /// ease that made the row feel hand-animated next to the rest of the menu bar.
+    private static let hoverDuration: TimeInterval = 0.15
+
     private var pointSize: CGFloat {
         Self.symbolPointSizes[image] ?? size
     }
@@ -172,15 +177,20 @@ struct RoundedRectangleButtonStyle: ButtonStyle {
         .padding(.horizontal, 12)
         .padding(.top, 8)
         .padding(.bottom, 7)
-        .vizGlassControl(cornerRadius: VizTheme.cornerMedium)
+        // The tile carries no hand-made chrome any more. On macOS 26+ `vizGlassControl`
+        // gives it the system's interactive glass, which supplies the hover and press
+        // response itself, so no ring is drawn over it; the material fallback below macOS 26
+        // has no interactive glass and keeps one subtle hairline edge, and the hover state
+        // only brightens that edge. The press scale that used to live here is gone as well:
+        // macOS lightens or dims a control while it is held down, it never scales it.
+        // The hover timing is the system's pace for control feedback, not the 0.3 s the
+        // hand-made ring used.
+        .vizGlassControl(cornerRadius: VizTheme.cornerControl, hovered: isHovered)
         .foregroundColor(.primary)
-        .overlay(
-            RoundedRectangle(cornerRadius: VizTheme.cornerMedium)
-                .strokeBorder(isHovered ? Color.primary.opacity(0.22) : Color.secondary.opacity(0.18), lineWidth: 1)
-        )
-        .animation(.easeInOut(duration: 0.3), value: isHovered)
-        .cornerRadius(VizTheme.cornerMedium)
-        .scaleEffect(configuration.isPressed ? 0.95 : 1.0)
+        // Same continuous curve as the glass shape, so the tile's edge - glass or fallback
+        // hairline - follows one rounded rectangle instead of being squared off by a clip.
+        .clipShape(VizTheme.controlShape())
+        .animation(.easeInOut(duration: Self.hoverDuration), value: isHovered)
         .onHover { inside in
             isHovered = inside
         }
