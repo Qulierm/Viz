@@ -1169,20 +1169,12 @@ func checkStatusPanel(updater: Updater) -> (passed: Bool, details: String) {
                layer.cornerCurve == .continuous ? "continuous" : "raw \(layer.cornerCurve.rawValue)")
         native("cornerRadius", layer.cornerRadius == StatusItemController.panelCornerRadius,
                "\(layer.cornerRadius) == StatusItemController.panelCornerRadius (\(StatusItemController.panelCornerRadius))")
-        native("borderWidth", layer.borderWidth == StatusItemController.panelBorderWidth,
-               "\(layer.borderWidth) == StatusItemController.panelBorderWidth (\(StatusItemController.panelBorderWidth))")
-        // The edge is the separator hairline, not a colour of the app's own, so it is compared
-        // against what `NSColor.separatorColor` resolves to in this appearance (one unit in
-        // 255 of slack for the colour-space conversion).
-        let edge = layer.borderColor.flatMap { NSColor(cgColor: $0) }?.usingColorSpace(.deviceRGB)
-        let separator = NSColor.separatorColor.usingColorSpace(.deviceRGB)
-        let equal = { (a: CGFloat, b: CGFloat) in abs(a - b) <= 1.0 / 255.0 }
-        let matchesSeparator = edge != nil && separator != nil
-            && equal(edge!.redComponent, separator!.redComponent)
-            && equal(edge!.greenComponent, separator!.greenComponent)
-            && equal(edge!.blueComponent, separator!.blueComponent)
-            && equal(edge!.alphaComponent, separator!.alphaComponent)
-        native("borderColour", matchesSeparator, "\(channels(edge)) == separator \(channels(separator))")
+        // The reference panel draws no outer edge at all - the only hairlines in it are its
+        // internal dividers - so the panel's layer must carry no border. A `CALayer`'s
+        // `borderColor` can never be nil (it reads back as black), so the colour is only
+        // reported: at width 0 it is unused.
+        native("borderWidth", layer.borderWidth == 0,
+               "\(layer.borderWidth) == 0 (borderColor unused: \(channels(layer.borderColor.flatMap { NSColor(cgColor: $0) })))")
     } else {
         native("cornerCurve", false, "the panel's effect view has no layer")
     }
