@@ -455,7 +455,10 @@ final class StatusItemController: NSObject {
         return panel
     }
 
-    static let popoverWidth: CGFloat = 480
+    /// The popover's width: a vertical menu family width. The reference Wi-Fi panel measures
+    /// 313 pt (626 px at 2x); 300 pt sits in that family and leaves the rows' right-aligned
+    /// hints a comfortable trailing edge.
+    static let popoverWidth: CGFloat = 300
 
     @objc private func openSettings() {
         closePopover()
