@@ -124,10 +124,11 @@ final class StatusItemController: NSObject {
     static let toggleSuppressionWindow: TimeInterval = 0.3
 
     /// Native panel chrome. AppKit exposes no API for the system's panel radius, so this
-    /// follows the radius family the system's own menu-bar panels use on this OS generation
-    /// and was chosen by comparing the panel against them; the curve is the system's
-    /// continuous (squircle) curve rather than the default circular one, and the 0.5 pt edge
-    /// is the separator hairline native panels draw instead of a coloured stroke.
+    /// follows the radius family the system's own menu-bar panels use on this OS generation;
+    /// the curve is the system's continuous (squircle) curve rather than a `CALayer`'s default
+    /// circular one, and the 0.5 pt edge is the separator hairline the system's own panels
+    /// draw instead of a coloured stroke. How the panel sits next to those panels by eye is
+    /// checked against the on-screen list in BUILDING.md - the harness cannot photograph it.
     static let panelCornerRadius: CGFloat = 16
     static let panelBorderWidth: CGFloat = 0.5
     /// The panel's appearance animation: short, so it reads as the system's own pace. The
