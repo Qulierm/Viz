@@ -15,8 +15,9 @@
 //    * nativetiles- the popover tiles must look native: one continuous corner at the
 //                 documented radius, no press scaling and no hand-made stroke ring over
 //                 the glass. The chrome of the panel itself is asserted inside the
-//                 `statuspanel` check. Both say which parts are structural (layer facts,
-//                 constants, source) and which are rendered.
+//                 `statuspanel` check, and the reference's badge geometry, fills and glyph
+//                 contrast by `nativebadges`. All of them say which parts are structural
+//                 (constants, layer values, source) and which are rendered.
 //
 // The harness compiles the app's real sources (see `scripts/render-check.sh`) and exits
 // non-zero when any check fails. Every check reports what it observed; a check that
@@ -1219,8 +1220,11 @@ func checkStatusPanel(updater: Updater) -> (passed: Bool, details: String) {
     if let layer = effect.layer {
         native("cornerCurve", layer.cornerCurve == .continuous,
                layer.cornerCurve == .continuous ? "continuous" : "raw \(layer.cornerCurve.rawValue)")
-        native("cornerRadius", layer.cornerRadius == StatusItemController.panelCornerRadius,
-               "\(layer.cornerRadius) == StatusItemController.panelCornerRadius (\(StatusItemController.panelCornerRadius))")
+        native("cornerRadius",
+               layer.cornerRadius == StatusItemController.panelCornerRadius
+                   && abs(layer.cornerRadius - panelCornerRadiusDocumented) <= panelCornerRadiusTolerance,
+               "\(layer.cornerRadius) == StatusItemController.panelCornerRadius (\(StatusItemController.panelCornerRadius)), " +
+               "documented \(panelCornerRadiusDocumented) +/- \(panelCornerRadiusTolerance)")
         // The reference panel draws no outer edge at all - the only hairlines in it are its
         // internal dividers - so the panel's layer must carry no border. A `CALayer`'s
         // `borderColor` can never be nil (it reads back as black), so the colour is only
@@ -1286,6 +1290,13 @@ func readTileSource() -> String? {
     return String(tail)
 }
 
+/// The panel corner the reference measures: its arc reaches the panel's left edge 14 px (7 pt)
+/// down. Compared both with the app's own constant and with this documented value, because a
+/// change to the constant alone would otherwise keep the layer and the constant in agreement
+/// while the panel drifts away from the reference.
+let panelCornerRadiusDocumented: CGFloat = 7
+let panelCornerRadiusTolerance: CGFloat = 0.5
+
 /// The tile corner radius this design documents - the native reference's hovered row measures
 /// ~14 px (5-7 pt). The harness carries the value on purpose: a widened tile corner has to fail
 /// the check instead of shipping quietly, and this is the number here that is a copy.
@@ -1303,6 +1314,180 @@ let tileCornerInsetCeiling = 4.0
 /// The rest fill is fully transparent and must equal the harness backdrop; the hover fill is the
 /// system's opaque selection colour and must equal it.
 let tileFillTolerance = 2.0
+
+// --- native badges ----------------------------------------------------------
+
+/// The badge diameter the reference measures (54 px at 2x; its grey badge 52 px). The harness
+/// carries the value so a shrunken badge fails by name; this is a copy on purpose.
+let badgeDiameterDocumented: CGFloat = 27
+let badgeDiameterTolerance: CGFloat = 0.5
+/// How far a badge's rendered diameter may sit from the documented one, in device pixels.
+let badgeDiameterRenderedTolerance = 2
+/// The reference's hover-highlight corner range: its hovered row measures ~14 px, so 5-7 pt.
+let tileRadiusRange: ClosedRange<CGFloat> = 5...7
+/// Minimum distance between the badge glyph and the badge fill, in luminance (0...1). The port
+/// draws a white glyph on the accent badge and a label-coloured one on the neutral badges - light
+/// in dark appearance and dark in light appearance, where a fixed white glyph would sit at about
+/// 0.15 luminance against the light neutral fill.
+let badgeGlyphContrastMinimum = 0.35
+
+/// The reference's badges: one 27 pt circle per tile, accent-filled on the primary action and
+/// neutral on the other four, each with a glyph that stays legible in both appearances.
+///
+/// Structural entries compare the app's own constants (`VizTheme.badgeDiameter`,
+/// `VizTheme.cornerControl`) with the values the design documents; the rendered entries measure
+/// the badges in a capture of the real tile. The tile's own resting and hover fills and its
+/// corner geometry are asserted by `nativetiles` (`tileRestFill`, `tileHoverFill`,
+/// `tileCornerRendered`) and are not duplicated here.
+///
+/// NOT covered offscreen: the panel's material (a behind-window sample is resolved by the
+/// WindowServer), and any press response - no static capture can press a control.
+func checkNativeBadges() -> (passed: Bool, details: String) {
+    var failures: [String] = []
+    var entries: [String] = []
+    func entry(_ name: String, _ ok: Bool, _ value: String) {
+        entries.append("native=\(name):\(ok ? "ok" : "FAILED")(\(value))")
+        if !ok {
+            failures.append("native badge '\(name)' is wrong: \(value)")
+        }
+    }
+
+    // 1. Structural: the constants the design documents.
+    let diameter = VizTheme.badgeDiameter
+    entry("badgeDiameter", abs(diameter - badgeDiameterDocumented) <= badgeDiameterTolerance,
+          "\(diameter) == documented \(badgeDiameterDocumented) +/- \(badgeDiameterTolerance)")
+    let tileRadius = VizTheme.cornerControl
+    entry("tileRadiusRange", tileRadiusRange.contains(tileRadius),
+          "\(tileRadius)pt inside the reference's \(tileRadiusRange.lowerBound)-\(tileRadiusRange.upperBound)pt range")
+
+    // 2. Rendered: the real tile, over the harness backdrop, in both badge states and in both
+    //    appearances - the neutral badge's glyph has to invert in light appearance.
+    let canvas = NSSize(width: 120, height: 110)
+    func ink(_ rep: NSBitmapImageRep, _ x: Int, _ y: Int, backdrop: NSColor) -> Bool {
+        guard let c = rep.colorAt(x: x, y: y)?.usingColorSpace(.deviceRGB) else { return false }
+        let base = backdrop.usingColorSpace(.deviceRGB) ?? .black
+        return abs(c.redComponent - base.redComponent) * 255 > 2
+            || abs(c.greenComponent - base.greenComponent) * 255 > 2
+            || abs(c.blueComponent - base.blueComponent) * 255 > 2
+    }
+    /// The badge is the topmost ink run in the canvas's centre column.
+    func badgeBox(_ rep: NSBitmapImageRep, backdrop: NSColor) -> (left: Int, right: Int, top: Int, bottom: Int)? {
+        let centre = rep.pixelsWide / 2
+        var top = -1, bottom = -1
+        for y in 0..<rep.pixelsHigh where ink(rep, centre, y, backdrop: backdrop) {
+            if top < 0 { top = y } else if y - bottom > 4 { break }
+            bottom = y
+        }
+        guard top >= 0 else { return nil }
+        var left = Int.max, right = Int.min
+        for y in top...bottom {
+            for x in 0..<rep.pixelsWide where ink(rep, x, y, backdrop: backdrop) {
+                left = min(left, x); right = max(right, x)
+            }
+        }
+        return left <= right ? (left, right, top, bottom) : nil
+    }
+    struct BadgeMeasure {
+        let diameter: Int
+        let fill: (r: Double, g: Double, b: Double)
+        let glyphContrast: Double
+        /// True when the glyph is brighter than its fill (dark appearance).
+        let glyphIsBrighter: Bool
+    }
+    func measureBadge(primary: Bool, scheme: ColorScheme) -> BadgeMeasure? {
+        let backdrop = Backdrop.forScheme(scheme)
+        let tile = Button("Capture") {}
+            .buttonStyle(RoundedRectangleButtonStyle(image: "viewfinder", size: 15, primary: primary))
+        let root = ZStack {
+            Color(nsColor: backdrop)
+            tile
+        }
+        .frame(width: canvas.width, height: canvas.height)
+        guard let rep = renderView(root, size: canvas, scheme: scheme,
+                                   pngName: "nativebadges-\(primary ? "accent" : "neutral")-\(scheme == .dark ? "dark" : "light").png",
+                                   backdrop: backdrop, windowBackdrop: backdrop),
+              let box = badgeBox(rep, backdrop: backdrop) else { return nil }
+        let scale = Double(rep.pixelsWide) / Double(canvas.width)
+        let centreX = (box.left + box.right) / 2
+        let centreY = (box.top + box.bottom) / 2
+        // The fill is sampled 11 pt left of the centre: inside the 13.5 pt radius, clear of the
+        // glyph's strokes.
+        guard let fillColor = rep.colorAt(x: centreX - Int(11 * scale), y: centreY)?.usingColorSpace(.deviceRGB) else {
+            return nil
+        }
+        let fill = (Double(fillColor.redComponent), Double(fillColor.greenComponent), Double(fillColor.blueComponent))
+        let fillLuminance = 0.2126 * fill.0 + 0.7152 * fill.1 + 0.0722 * fill.2
+        var extreme = fillLuminance, extremeIsBrighter = true
+        for y in (centreY - Int(6 * scale))...(centreY + Int(6 * scale)) {
+            for x in (centreX - Int(6 * scale))...(centreX + Int(6 * scale)) {
+                guard let c = rep.colorAt(x: x, y: y)?.usingColorSpace(.deviceRGB) else { continue }
+                let luminance = 0.2126 * Double(c.redComponent) + 0.7152 * Double(c.greenComponent)
+                    + 0.0722 * Double(c.blueComponent)
+                if abs(luminance - fillLuminance) > abs(extreme - fillLuminance) {
+                    extreme = luminance
+                    extremeIsBrighter = luminance > fillLuminance
+                }
+            }
+        }
+        return BadgeMeasure(diameter: max(box.right - box.left + 1, box.bottom - box.top + 1),
+                            fill: fill,
+                            glyphContrast: abs(extreme - fillLuminance),
+                            glyphIsBrighter: extremeIsBrighter)
+    }
+
+    let accent = measureBadge(primary: true, scheme: .dark)
+    let neutral = measureBadge(primary: false, scheme: .dark)
+    let neutralLight = measureBadge(primary: false, scheme: .light)
+
+    if let accent, let neutral, let neutralLight {
+        let expected = badgeDiameterDocumented * 2
+        entry("badgeDiameterRendered",
+              [accent, neutral, neutralLight].allSatisfy { abs(Double($0.diameter) - expected) <= Double(badgeDiameterRenderedTolerance) },
+              "accent=\(accent.diameter)px neutral=\(neutral.diameter)px light=\(neutralLight.diameter)px" +
+              " (expected \(Int(expected)) +/- \(badgeDiameterRenderedTolerance))")
+
+        // The fills, against the semantic colours the app documents, composited over the backdrop
+        // they are rendered on (the neutral fill is translucent).
+        let backdrop = Backdrop.dark.usingColorSpace(.deviceRGB) ?? .black
+        func composited(_ colour: NSColor) -> (Double, Double, Double)? {
+            guard let c = colour.usingColorSpace(.deviceRGB) else { return nil }
+            let a = Double(c.alphaComponent)
+            return (Double(c.redComponent) * a + Double(backdrop.redComponent) * (1 - a),
+                    Double(c.greenComponent) * a + Double(backdrop.greenComponent) * (1 - a),
+                    Double(c.blueComponent) * a + Double(backdrop.blueComponent) * (1 - a))
+        }
+        func close(_ measured: (r: Double, g: Double, b: Double), _ reference: (Double, Double, Double)?) -> Bool {
+            guard let reference else { return false }
+            return abs(measured.r - reference.0) * 255 <= tileFillTolerance
+                && abs(measured.g - reference.1) * 255 <= tileFillTolerance
+                && abs(measured.b - reference.2) * 255 <= tileFillTolerance
+        }
+        func describe(_ value: (Double, Double, Double)?) -> String {
+            guard let value else { return "none" }
+            return "\(Int(value.0 * 255)),\(Int(value.1 * 255)),\(Int(value.2 * 255))"
+        }
+        let accentReference = composited(.controlAccentColor)
+        let neutralReference = composited(.quaternaryLabelColor)
+        entry("badgeFills", close(accent.fill, accentReference) && close(neutral.fill, neutralReference),
+              "accent \(describe(accent.fill)) == controlAccentColor \(describe(accentReference)), " +
+              "neutral \(describe(neutral.fill)) == quaternaryLabelColor over the backdrop \(describe(neutralReference))" +
+              " (tolerance \(Int(tileFillTolerance)))")
+
+        entry("badgeGlyph",
+              accent.glyphContrast >= badgeGlyphContrastMinimum && accent.glyphIsBrighter
+                  && neutral.glyphContrast >= badgeGlyphContrastMinimum && neutral.glyphIsBrighter
+                  && neutralLight.glyphContrast >= badgeGlyphContrastMinimum && !neutralLight.glyphIsBrighter,
+              String(format: "accent %.2f brighter, neutral %.2f brighter (dark), neutral-light %.2f darker (minimum %.2f)",
+                     accent.glyphContrast, neutral.glyphContrast, neutralLight.glyphContrast, badgeGlyphContrastMinimum))
+    } else {
+        entry("badgeDiameterRendered", false, "render failed")
+        entry("badgeFills", false, "render failed")
+        entry("badgeGlyph", false, "render failed")
+    }
+
+    let details = entries.joined(separator: " ") + (failures.isEmpty ? "" : " -> failed: \(failures.joined(separator: ", "))")
+    return (failures.isEmpty, details)
+}
 
 // --- native tiles -----------------------------------------------------------
 
@@ -2221,35 +2406,39 @@ report("statuspanel", statusPanel.passed, statusPanel.details)
 let nativeTiles = checkNativeTiles()
 report("nativetiles", nativeTiles.passed, nativeTiles.details)
 
-// 6. popover content transparency
+// 6. native badges
+let nativeBadges = checkNativeBadges()
+report("nativebadges", nativeBadges.passed, nativeBadges.details)
+
+// 7. popover content transparency
 let popoverContent = checkPopoverContent()
 report("popovercontent", popoverContent.passed, popoverContent.details)
 
-// 7. alignment
+// 8. alignment
 let alignment = checkAlignment()
 report("alignment", alignment.passed, alignment.details)
 
-// 8. preview close control
+// 9. preview close control
 let previewClose = checkPreviewClose()
 report("previewclose", previewClose.passed, previewClose.details)
 
-// 9. settings
+// 10. settings
 let settings = checkSettings()
 report("settings", settings.passed, settings.details)
 
-// 10. clipboard
+// 11. clipboard
 let clipboard = checkClipboard()
 report("clipboard", clipboard.passed, clipboard.details)
 
-// 11. window size
+// 12. window size
 let windowSize = checkWindowSize()
 report("windowsize", windowSize.passed, windowSize.details)
 
-// 12. translucency
+// 13. translucency
 let translucency = checkTranslucency()
 report("translucency", translucency.passed, translucency.details)
 
-// 13. design
+// 14. design
 let design = checkDesign()
 report("design", design.passed, design.details)
 for surface in AppSurface.allCases {
