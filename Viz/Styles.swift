@@ -129,8 +129,10 @@ struct RoundedRectangleButtonStyle: ButtonStyle {
 
     /// How long the tile's hover feedback takes (the fallback hairline brightening). The
     /// system's own control feedback sits in the 0.1-0.15 s range, and it replaced a 0.3 s
-    /// ease that made the row feel hand-animated next to the rest of the menu bar.
-    private static let hoverDuration: TimeInterval = 0.15
+    /// ease that made the row feel hand-animated next to the rest of the menu bar. Not
+    /// private on purpose: the render harness's `nativetiles` check asserts this value is
+    /// still inside the system's band.
+    static let hoverDuration: TimeInterval = 0.15
 
     private var pointSize: CGFloat {
         Self.symbolPointSizes[image] ?? size

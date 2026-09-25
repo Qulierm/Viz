@@ -12,6 +12,11 @@
 //    * clipboard- text written by the app's own `copyTextItemsToClipboard(textItems:)`
 //                 must be readable from a separate `/usr/bin/pbpaste` process, and the
 //                 preview window must be able to become key so its text can be copied.
+//    * nativetiles- the popover tiles must look native: one continuous corner at the
+//                 documented radius, no press scaling and no hand-made stroke ring over
+//                 the glass. The chrome of the panel itself is asserted inside the
+//                 `statuspanel` check. Both say which parts are structural (layer facts,
+//                 constants, source) and which are rendered.
 //
 // The harness compiles the app's real sources (see `scripts/render-check.sh`) and exits
 // non-zero when any check fails. Every check reports what it observed; a check that
@@ -1132,7 +1137,285 @@ func checkStatusPanel(updater: Updater) -> (passed: Bool, details: String) {
     summaries.append("lifecycle=\(steps.joined(separator: "/"))")
     controller.recordsPresentationOnly = true
 
+    // Native chrome, read from the panel the app builds, after presenting it once more with
+    // `recordsPresentationOnly` set: the presentation is recorded and no window is ordered on
+    // screen, so nothing here depends on a visible display. The expected values are the app's
+    // own constants rather than copies, so changing the chrome fails these entries by name.
+    //
+    // These are layer facts, not pixels: the panel's chrome cannot be photographed offscreen
+    // (a `behindWindow` material samples the desktop behind it), so what the panel looks like
+    // on screen is left to the on-screen checklist in BUILDING.md. What the entries cover is
+    // that the values the chrome is built from are the documented ones - curve, radius, edge,
+    // material, blending, level, opacity, deactivation and the appearance decision.
+    controller.ignoresToggleSuppression = true
+    controller.togglePopover()
+    controller.ignoresToggleSuppression = false
+    pumpRunLoop(0.05)
+
+    func native(_ name: String, _ ok: Bool, _ value: String) {
+        summaries.append("native=\(name):\(ok ? "ok" : "FAILED")(\(value))")
+        if !ok {
+            failures.append("native chrome '\(name)' is wrong: \(value)")
+        }
+    }
+    func channels(_ colour: NSColor?) -> String {
+        guard let colour = colour?.usingColorSpace(.deviceRGB) else { return "none" }
+        return String(format: "%.3f,%.3f,%.3f a%.2f",
+                      colour.redComponent, colour.greenComponent, colour.blueComponent, colour.alphaComponent)
+    }
+
+    if let layer = effect.layer {
+        native("cornerCurve", layer.cornerCurve == .continuous,
+               layer.cornerCurve == .continuous ? "continuous" : "raw \(layer.cornerCurve.rawValue)")
+        native("cornerRadius", layer.cornerRadius == StatusItemController.panelCornerRadius,
+               "\(layer.cornerRadius) == StatusItemController.panelCornerRadius (\(StatusItemController.panelCornerRadius))")
+        native("borderWidth", layer.borderWidth == StatusItemController.panelBorderWidth,
+               "\(layer.borderWidth) == StatusItemController.panelBorderWidth (\(StatusItemController.panelBorderWidth))")
+        // The edge is the separator hairline, not a colour of the app's own, so it is compared
+        // against what `NSColor.separatorColor` resolves to in this appearance (one unit in
+        // 255 of slack for the colour-space conversion).
+        let edge = layer.borderColor.flatMap { NSColor(cgColor: $0) }?.usingColorSpace(.deviceRGB)
+        let separator = NSColor.separatorColor.usingColorSpace(.deviceRGB)
+        let equal = { (a: CGFloat, b: CGFloat) in abs(a - b) <= 1.0 / 255.0 }
+        let matchesSeparator = edge != nil && separator != nil
+            && equal(edge!.redComponent, separator!.redComponent)
+            && equal(edge!.greenComponent, separator!.greenComponent)
+            && equal(edge!.blueComponent, separator!.blueComponent)
+            && equal(edge!.alphaComponent, separator!.alphaComponent)
+        native("borderColour", matchesSeparator, "\(channels(edge)) == separator \(channels(separator))")
+    } else {
+        native("cornerCurve", false, "the panel's effect view has no layer")
+    }
+
+    native("material", effect.material == .menu,
+           effect.material == .menu ? "menu" : "raw \(effect.material.rawValue)")
+    native("blending", effect.blendingMode == .behindWindow,
+           effect.blendingMode == .behindWindow ? "behindWindow" : "raw \(effect.blendingMode.rawValue)")
+    native("level", panel.level == .popUpMenu, "\(panel.level.rawValue) == popUpMenu")
+    native("opaque", !panel.isOpaque, "isOpaque=\(panel.isOpaque)")
+    native("hidesOnDeactivate", !panel.hidesOnDeactivate, "hidesOnDeactivate=\(panel.hidesOnDeactivate)")
+    native("appearDuration",
+           StatusItemController.panelAppearDuration >= 0.05 && StatusItemController.panelAppearDuration <= 0.20,
+           String(format: "%.2fs, inside the system's 0.05-0.20s band", StatusItemController.panelAppearDuration))
+
+    // The appearance decision, read from the controller: with Reduce Motion off the panel
+    // fades in, with it on the panel is shown at its full size immediately. What is asserted
+    // is the decision the appearance code branches on plus one real presentation with Reduce
+    // Motion forced on - the branch sets full opacity before ordering the panel front, so the
+    // panel has to be opaque the moment it is shown. (No timing is measured anywhere: that
+    // would be flaky, and the value under test is the decision, not the duration.)
+    let previousOverride = controller.reducesMotionOverride
+    controller.reducesMotionOverride = false
+    let animatesWhenOff = !controller.shouldReduceMotion
+    controller.reducesMotionOverride = true
+    let skipsWhenOn = controller.shouldReduceMotion
+
+    controller.recordsPresentationOnly = false
+    controller.ignoresGracePeriod = true
+    controller.ignoresToggleSuppression = true
+    controller.togglePopover()
+    let shownAtFullSize = panel.isVisible && panel.alphaValue == 1
+    controller.dismissPanel()
+    pumpRunLoop(0.2)
+    controller.recordsPresentationOnly = true
+    controller.ignoresGracePeriod = false
+    controller.ignoresToggleSuppression = false
+    controller.reducesMotionOverride = previousOverride
+    native("reduceMotion", animatesWhenOff && skipsWhenOn && shownAtFullSize,
+           "forcedOff=\(animatesWhenOff ? "animates" : "skips") forcedOn=\(skipsWhenOn ? "skips" : "animates") shownFullSize=\(shownAtFullSize)")
+
     let details = summaries.joined(separator: " ") + (failures.isEmpty ? "" : " -> failed: \(failures.joined(separator: ", "))")
+    return (failures.isEmpty, details)
+}
+
+/// The body of `struct RoundedRectangleButtonStyle` in the app's `Viz/Styles.swift` - the
+/// source of the popover tile - or nil when the file or the declaration cannot be read.
+func readTileSource() -> String? {
+    guard let source = try? String(contentsOfFile: "\(rootPath)/Viz/Styles.swift", encoding: .utf8) else {
+        return nil
+    }
+    guard let start = source.range(of: "struct RoundedRectangleButtonStyle") else { return nil }
+    let tail = source[start.lowerBound...]
+    if let end = tail.range(of: "\nstruct ", options: [], range: tail.index(after: tail.startIndex)..<tail.endIndex) {
+        return String(tail[..<end.lowerBound])
+    }
+    return String(tail)
+}
+
+/// The two branches of `vizGlassControl` in `Viz/Logic/VizColors.swift`: the shipping branch
+/// (macOS 26+ interactive glass) and the material fallback below it.
+func readGlassControlBranches() -> (shipping: String, fallback: String)? {
+    guard let source = try? String(contentsOfFile: "\(rootPath)/Viz/Logic/VizColors.swift", encoding: .utf8) else {
+        return nil
+    }
+    guard let start = source.range(of: "func vizGlassControl(") else { return nil }
+    let tail = source[start.lowerBound...]
+    guard let split = tail.range(of: "} else {") else { return nil }
+    let fallbackBody = tail[split.upperBound...]
+    // Bound the fallback branch at its own closing brace (eight spaces of indentation), so the
+    // helpers declared after it cannot leak into the scan.
+    let end = fallbackBody.range(of: "\n        }") ?? fallbackBody.range(of: "\n    }")
+    return (String(tail[..<split.lowerBound]),
+            end.map { String(fallbackBody[..<$0.lowerBound]) } ?? String(fallbackBody))
+}
+
+/// Peak luminance of the material fallback tile's top hairline over the dark backdrop, at
+/// rest. Measured 0.2165 for the single 0.10-primary hairline the tile keeps in the fallback,
+/// and 0.3966 for the same hairline at 0.35 - so the ceiling below separates "a subtle edge"
+/// from "an edge turned into a stroke". The hand-made ring the tile used to draw is not
+/// visible here at all: this render applies `vizGlassControl` alone, without the button style
+/// that drew the ring (measured: restoring it left this value unchanged at 0.2165), which is
+/// why `tileRing` is asserted from the source instead.
+let tileEdgeRestCeiling = 0.26
+
+/// The tile corner radius this design documents (the native-chrome changes, recorded in
+/// BUILDING.md). The harness carries the value on purpose: a widened tile corner has to fail
+/// the check instead of shipping quietly, and this is the one number here that is a copy.
+let tileCornerRadiusDocumented: CGFloat = 11
+/// How far the app's constant may sit from the documented radius before that is a real change.
+let tileCornerRadiusTolerance: CGFloat = 0.5
+/// Rendered corner geometry of the fallback tile: how much of the tile is missing 4 pt inside
+/// its left edge, and how far the first row of the edge starts in from the left edge (both in
+/// points). Measured 2.0 pt and 6.5 pt for the documented 11 pt corner (2.5 and 7.5 at 12 pt),
+/// while the old 16 pt chamfer lands at 5.0 pt - so the ceilings below catch a looser corner.
+let tileCornerDepthCeiling = 3.5
+let tileCornerInsetCeiling = 9.0
+
+// --- native tiles -----------------------------------------------------------
+
+/// The popover tiles must behave the way a system control does: one continuous corner at the
+/// documented radius, no press scaling, no hand-made ring over the glass, and a hover cue that
+/// is no more than a brightening of the fallback's own edge.
+///
+/// The entries mix three kinds of evidence, and each value string says which:
+///  * the app's own constants and shape API (`VizTheme.cornerControl`, `VizTheme.controlShape`,
+///    `RoundedRectangleButtonStyle.hoverDuration`) plus the radius the design documents - a
+///    value drift or a widened radius fails the entry by name;
+///  * rendered measurements of the material fallback tile, the only tile this process can
+///    capture (see `VizTheme.useMaterialFallback`): the hairline's brightness and the corner
+///    geometry the tile actually draws;
+///  * source-level assertions on `Viz/Styles.swift` and `Viz/Logic/VizColors.swift` for the two
+///    cues that exist only as code: a press-dependent transform and a stroke ring.
+///
+/// NOT covered: the macOS 26+ Liquid Glass rendering. Offscreen captures cannot rasterise it
+/// (a glass background wipes the siblings drawn before it), so the tile's real hover and press
+/// response - the interactive glass itself - is never rendered here, and no static capture can
+/// press a control. What is asserted instead is that the tile hands that response to the glass
+/// and draws nothing of its own in the shipping branch.
+func checkNativeTiles() -> (passed: Bool, details: String) {
+    var failures: [String] = []
+    var entries: [String] = []
+    func entry(_ name: String, _ ok: Bool, _ value: String) {
+        entries.append("native=\(name):\(ok ? "ok" : "FAILED")(\(value))")
+        if !ok {
+            failures.append("native tile '\(name)' is wrong: \(value)")
+        }
+    }
+
+    let tile = readTileSource()
+    let branches = readGlassControlBranches()
+
+    // 1. The shape the tile draws: the app's constant, the shape built from it, the tile's own
+    //    call sites, and the radius the design documents.
+    let shape = VizTheme.controlShape()
+    let usesConstant = shape.cornerSize.width == VizTheme.cornerControl
+    let callSites = (tile?.contains(".vizGlassControl(cornerRadius: VizTheme.cornerControl") ?? false)
+        && (tile?.contains(".clipShape(VizTheme.controlShape())") ?? false)
+    let documentedRadius = abs(VizTheme.cornerControl - tileCornerRadiusDocumented) <= tileCornerRadiusTolerance
+    entry("tileCornerRadius", usesConstant && callSites && documentedRadius,
+          "shape \(shape.cornerSize.width) == VizTheme.cornerControl (\(VizTheme.cornerControl)), " +
+          "documented \(tileCornerRadiusDocumented) +/- \(tileCornerRadiusTolerance), " +
+          "tile call sites=" + (callSites ? "glass+clip" : "MISSING in \(tile == nil ? "unreadable source" : "Viz/Styles.swift")"))
+    entry("tileCornerCurve", shape.style == .continuous,
+          shape.style == .continuous ? "continuous" : "circular")
+
+    // 2. The hover timing, from the constant the tile animates with.
+    let hover = RoundedRectangleButtonStyle.hoverDuration
+    entry("tileHoverDuration", hover >= 0.10 && hover <= 0.20,
+          String(format: "%.2fs, inside the system's 0.10-0.20s band", hover))
+
+    // 3. Rendered: the tile the app draws in the fallback, over the dark backdrop the harness
+    //    uses. The tile is 108x34 pt centred in 140x48, so it spans x=16...124, y=7...41.
+    let tileSize = NSSize(width: 140, height: 48)
+    let tileLeft = 16.0, tileTop = 7.0
+    func renderTile(hovered: Bool) -> NSBitmapImageRep? {
+        let root = ZStack {
+            Color(nsColor: Backdrop.dark)
+            VStack { Image(systemName: "viewfinder").font(.system(size: 16)) }
+                .frame(width: 108, height: 34)
+                .vizGlassControl(hovered: hovered)
+        }
+        .frame(width: tileSize.width, height: tileSize.height)
+        return renderView(root, size: tileSize, scheme: .dark,
+                          pngName: "nativetiles-\(hovered ? "hovered" : "rest").png",
+                          backdrop: Backdrop.dark, windowBackdrop: Backdrop.dark)
+    }
+    func edgePeak(_ rep: NSBitmapImageRep) -> Double {
+        let scale = Double(rep.pixelsWide) / Double(tileSize.width)
+        var peak = 0.0
+        for y in Int((tileTop + 0) * scale)..<Int((tileTop + 2) * scale) {
+            for x in Int((tileLeft + 4) * scale)..<Int((tileLeft + 104) * scale) {
+                peak = max(peak, pixelLuminance(rep, x, y) ?? 0)
+            }
+        }
+        return peak
+    }
+    /// How much of the tile is missing at 4 pt inside its left edge (the corner depth) and how
+    /// far the tile's first row starts in from that edge (the corner inset).
+    func cornerGeometry(_ rep: NSBitmapImageRep) -> (depth: Double, inset: Double)? {
+        let scale = Double(rep.pixelsWide) / Double(tileSize.width)
+        let backdrop = Backdrop.dark.usingColorSpace(.deviceRGB) ?? .black
+        func ink(_ x: Int, _ y: Int) -> Bool {
+            guard let c = rep.colorAt(x: x, y: y)?.usingColorSpace(.deviceRGB) else { return false }
+            return abs(c.redComponent - backdrop.redComponent) * 255 > 2
+                || abs(c.greenComponent - backdrop.greenComponent) * 255 > 2
+                || abs(c.blueComponent - backdrop.blueComponent) * 255 > 2
+        }
+        func firstRow(at x: Int) -> Int? { (0..<rep.pixelsHigh).first { ink(x, $0) } }
+        let centre = Int((tileLeft + 54) * scale)
+        guard let top = firstRow(at: centre), let insideCorner = firstRow(at: Int((tileLeft + 4) * scale)) else {
+            return nil
+        }
+        let row = min(top + 1, rep.pixelsHigh - 1)
+        var inset = 0.0
+        if let first = (Int((tileLeft - 2) * scale)..<centre).first(where: { ink($0, row) }) {
+            inset = Double(first) / scale - tileLeft
+        }
+        return (Double(insideCorner - top) / scale, inset)
+    }
+    if let rest = renderTile(hovered: false), let hoveredRep = renderTile(hovered: true) {
+        let restPeak = edgePeak(rest)
+        let hoveredPeak = edgePeak(hoveredRep)
+        entry("tileFallbackEdge", restPeak <= tileEdgeRestCeiling && hoveredPeak > restPeak + 0.02,
+              String(format: "rest=%.4f (ceiling %.2f) hovered=%.4f (must rise)", restPeak, tileEdgeRestCeiling, hoveredPeak))
+        if let geometry = cornerGeometry(rest) {
+            entry("tileCornerRendered",
+                  geometry.depth <= tileCornerDepthCeiling && geometry.inset <= tileCornerInsetCeiling,
+                  String(format: "depth=%.1fpt (ceiling %.1f) inset=%.1fpt (ceiling %.1f)",
+                         geometry.depth, tileCornerDepthCeiling, geometry.inset, tileCornerInsetCeiling))
+        } else {
+            entry("tileCornerRendered", false, "the tile's corner could not be measured")
+        }
+    } else {
+        entry("tileFallbackEdge", false, "render failed")
+        entry("tileCornerRendered", false, "render failed")
+    }
+
+    // 4. Source level: the tile reads no press state and draws no ring of its own, and the
+    //    only stroke in the control path is the fallback's hairline.
+    let pressFree = tile.map { !$0.contains("isPressed") && !$0.contains("scaleEffect") } ?? false
+    entry("tilePressScale", pressFree,
+          pressFree ? "1.0, the tile's body reads no press state"
+                    : "the tile body presses/scales again (\(tile == nil ? "unreadable source" : "Viz/Styles.swift"))")
+
+    let tileHasRing = tile.map { $0.contains("strokeBorder") || $0.contains("overlay(") } ?? true
+    let shippingRing = branches?.shipping.contains("strokeBorder") ?? true
+    let fallbackStrokes = branches.map { $0.fallback.components(separatedBy: "strokeBorder").count - 1 } ?? -1
+    let ringFree = !tileHasRing && !shippingRing && fallbackStrokes == 1
+    entry("tileRing", ringFree,
+          "tile=\(tileHasRing ? "ring" : "none") shippingBranch=\(shippingRing ? "ring" : "none") fallbackStrokes=\(fallbackStrokes)")
+
+    let details = entries.joined(separator: " ") + (failures.isEmpty ? "" : " -> failed: \(failures.joined(separator: ", "))")
     return (failures.isEmpty, details)
 }
 
@@ -1869,35 +2152,39 @@ report("statusmenu", statusMenu.passed, statusMenu.details)
 let statusPanel = checkStatusPanel(updater: updater)
 report("statuspanel", statusPanel.passed, statusPanel.details)
 
-// 5. popover content transparency
+// 5. native tiles
+let nativeTiles = checkNativeTiles()
+report("nativetiles", nativeTiles.passed, nativeTiles.details)
+
+// 6. popover content transparency
 let popoverContent = checkPopoverContent()
 report("popovercontent", popoverContent.passed, popoverContent.details)
 
-// 6. alignment
+// 7. alignment
 let alignment = checkAlignment()
 report("alignment", alignment.passed, alignment.details)
 
-// 7. preview close control
+// 8. preview close control
 let previewClose = checkPreviewClose()
 report("previewclose", previewClose.passed, previewClose.details)
 
-// 8. settings
+// 9. settings
 let settings = checkSettings()
 report("settings", settings.passed, settings.details)
 
-// 9. clipboard
+// 10. clipboard
 let clipboard = checkClipboard()
 report("clipboard", clipboard.passed, clipboard.details)
 
-// 10. window size
+// 11. window size
 let windowSize = checkWindowSize()
 report("windowsize", windowSize.passed, windowSize.details)
 
-// 11. translucency
+// 12. translucency
 let translucency = checkTranslucency()
 report("translucency", translucency.passed, translucency.details)
 
-// 12. design
+// 13. design
 let design = checkDesign()
 report("design", design.passed, design.details)
 for surface in AppSurface.allCases {
