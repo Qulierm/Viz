@@ -24,70 +24,76 @@ struct ContentView: View {
     @EnvironmentObject var updater: Updater
     @State private var windowController = WindowManager.shared
 
-    /// The rule native menus draw before a destructive item, inset to the label column so it
-    /// reads as a menu divider rather than a full-width line.
-    private var destructiveDivider: some View {
-        Rectangle()
-            .fill(Color(nsColor: .separatorColor))
-            .frame(height: 1)
-            .padding(.leading, RoundedRectangleButtonStyle.labelColumnInset)
-            .padding(.trailing, RoundedRectangleButtonStyle.rowPadding)
-            .padding(.vertical, 4)
-    }
 
     var body: some View {
 
-        // The popover is a vertical menu in the native Wi-Fi panel's style: one row per action,
-        // a divider before the destructive one, and every row's hover highlight inset from the
-        // panel by the same padding.
-        VStack(alignment: .leading, spacing: 0) {
+        VStack(alignment: .center, spacing: 0) {
 
-            Button("Capture") {
-                CaptureService.shared.captureContent()
-                dismissPopover()
+            HStack(spacing: 8) {
+                VStack(spacing: 4) {
+                    Button("Capture") {
+                        CaptureService.shared.captureContent()
+                        dismissPopover()
+                    }
+                    .help("Capture section of screen to extract text and barcodes")
+                    .buttonStyle(RoundedRectangleButtonStyle(image: "viewfinder", size: 15))
+
+                    ShortcutEditorView(name: .captureContent)
+
+                }
+
+
+                VStack(spacing: 4) {
+                    Button("Webcam") {
+                        dismissPopover()
+                        openWebcamCapture()
+                    }
+                    .help("Open webcam capture window for OCR")
+                    .buttonStyle(RoundedRectangleButtonStyle(image: "camera", size: 15))
+
+                    ShortcutEditorView(name: .captureWebcam)
+
+                }
+
+                VStack(spacing: 4) {
+                    Button("Color") {
+                        dismissPopover()
+                        processColor()
+                    }
+                    .help("Capture hex/rgb value from click location")
+                    .buttonStyle(RoundedRectangleButtonStyle(image: "eyedropper", size: 15))
+
+                    ShortcutEditorView(name: .eyedropper)
+                }
+
+                VStack(spacing: 4) {
+                    Button("History") {
+                        openHistory()
+                        dismissPopover()
+                    }
+                    .help("Show history of captures from this session")
+                    .buttonStyle(RoundedRectangleButtonStyle(image: "clock", size: 15))
+
+                    ShortcutEditorView(name: .history)
+
+                }
+
+                VStack(spacing: 4) {
+                    Button("Clear") {
+                        clearClipboard()
+                    }
+                    .help("Clear clipboard contents and stored captures")
+                    .buttonStyle(RoundedRectangleButtonStyle(image: "delete.left", size: 15))
+
+                    ShortcutEditorView(name: .clear)
+                }
+
             }
-            .help("Capture section of screen to extract text and barcodes")
-            // Capture is the popover's primary action, so its badge takes the accent fill the
-            // way the reference's connected network does; the rest are neutral.
-            .buttonStyle(RoundedRectangleButtonStyle(image: "viewfinder", size: 15,
-                                                    shortcutName: .captureContent, primary: true))
+            .padding(.horizontal, 16)
+            .padding(.vertical, 10)
 
-            Button("Webcam") {
-                dismissPopover()
-                openWebcamCapture()
-            }
-            .help("Open webcam capture window for OCR")
-            .buttonStyle(RoundedRectangleButtonStyle(image: "camera", size: 15,
-                                                    shortcutName: .captureWebcam))
-
-            Button("Color") {
-                dismissPopover()
-                processColor()
-            }
-            .help("Capture hex/rgb value from click location")
-            .buttonStyle(RoundedRectangleButtonStyle(image: "eyedropper", size: 15,
-                                                    shortcutName: .eyedropper))
-
-            Button("History") {
-                openHistory()
-                dismissPopover()
-            }
-            .help("Show history of captures from this session")
-            .buttonStyle(RoundedRectangleButtonStyle(image: "clock", size: 15,
-                                                    shortcutName: .history))
-
-            destructiveDivider
-
-            Button("Clear") {
-                clearClipboard()
-            }
-            .help("Clear clipboard contents and stored captures")
-            .buttonStyle(RoundedRectangleButtonStyle(image: "delete.left", size: 15,
-                                                    shortcutName: .clear))
 
         }
-        .padding(.vertical, RoundedRectangleButtonStyle.panelPadding)
-        .padding(.horizontal, RoundedRectangleButtonStyle.panelPadding)
         // The popover width comes from the status item controller, so the panel and its
         // content always agree on how wide the popover is.
         .frame(width: StatusItemController.popoverWidth)

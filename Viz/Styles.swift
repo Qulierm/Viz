@@ -106,27 +106,14 @@ struct SimpleButtonBrightStyle: ButtonStyle {
 }
 
 
-/// One row of the popover's vertical menu, in the native Wi-Fi panel's style: a leading 27 pt
-/// circular badge, a 13 pt primary label and the shortcut hint right-aligned at the row's
-/// trailing edge, with the system's unemphasized selection colour as the row's hover highlight.
-///
-/// The type name is left over from the horizontal row of tiles this replaces; what it draws now
-/// is a row (the highlight is still a rounded rectangle). The harness's own renders construct it
-/// by name, so the rename belongs with the check re-base.
 struct RoundedRectangleButtonStyle: ButtonStyle {
     @State private var isHovered = false
     let image: String
     let size: CGFloat
-    /// True for the popover's primary action (Capture): the reference gives that item's badge
-    /// the accent fill and every other item the neutral one.
-    let primary: Bool
-    /// The shortcut whose hint is shown right-aligned in this row; nil draws the row without a
-    /// hint (the harness's own renders, which only measure the badge and the fills).
-    let shortcutName: KeyboardShortcuts.Name?
 
     /// SF Symbols have different intrinsic proportions at the same point size - the camera
-    /// draws about 20 % wider than the viewfinder - so a single shared size makes a column of
-    /// badges look uneven. These point sizes bring the five symbols to the same ink width
+    /// draws about 20 % wider than the viewfinder - so a single shared size makes the row
+    /// look uneven. These point sizes bring the five popover symbols to the same ink width
     /// (measured at 2x: 31 device px each); anything not listed uses `size`.
     private static let symbolPointSizes: [String: CGFloat] = [
         "viewfinder": 16,
@@ -136,95 +123,83 @@ struct RoundedRectangleButtonStyle: ButtonStyle {
         "delete.left": 14.5
     ]
 
-    // MARK: Row geometry
-    //
-    // The reference's rows measure 64-72 px (32-36 pt) at 2x with a 54 px (27 pt) badge in
-    // them, so 32 pt is the bottom of that family and leaves 2.5 pt above and below the badge.
-    // These constants are the row's whole geometry: the harness reads them, which is why they
-    // are not private.
+    /// The box every symbol is drawn in, so all five share one vertical centre and the
+    /// labels below them start at the same y.
+    private static let iconSlot = CGSize(width: 24, height: 18)
 
-    /// Height of one row.
-    static let rowHeight: CGFloat = 32
-    /// Gap between the badge and the row's label.
-    static let badgeLabelGap: CGFloat = 10
-    /// Inset from the row's own edges to its content.
-    static let rowPadding: CGFloat = 10
-    /// Padding between the rows and the panel's edges, so every row's hover highlight is inset
-    /// from the panel the way the reference's is.
-    static let panelPadding: CGFloat = 6
-    /// Where the label column starts inside a row. The divider before the destructive row starts
-    /// here too, which is what makes it read as a menu divider rather than a full-width rule.
-    static var labelColumnInset: CGFloat { rowPadding + VizTheme.badgeDiameter + badgeLabelGap }
-    /// How long the row's hover feedback takes (the highlight fading in). The system's own
-    /// control feedback sits in the 0.1-0.15 s range. Not private on purpose: the render
-    /// harness's `nativetiles` check asserts this value is still inside the system's band.
+    /// How long the tile's hover feedback takes (the fallback hairline brightening). The
+    /// system's own control feedback sits in the 0.1-0.15 s range, and it replaced a 0.3 s
+    /// ease that made the row feel hand-animated next to the rest of the menu bar. Not
+    /// private on purpose: the render harness's `nativetiles` check asserts this value is
+    /// still inside the system's band.
     static let hoverDuration: TimeInterval = 0.15
 
     private var pointSize: CGFloat {
         Self.symbolPointSizes[image] ?? size
     }
     let color: Color?
+    let shortcut: KeyboardShortcuts.Shortcut?
 
-    init(image: String, size: CGFloat, color: Color? = .primary,
-         shortcutName: KeyboardShortcuts.Name? = nil, primary: Bool = false) {
+    init(image: String, size: CGFloat, color: Color? = .primary, shortcut: KeyboardShortcuts.Shortcut? = nil) {
         self.image = image
         self.size = size
         self.color = color
-        self.shortcutName = shortcutName
-        self.primary = primary
-    }
-
-    /// The row's leading badge: the reference's 27 pt circle with the glyph inside it. It is a
-    /// layout element of the row now (it was a background of an 18 pt icon slot when the popover
-    /// was a row of tiles), so the row's height is what holds it; the per-symbol point sizes keep
-    /// the five glyphs optically equal, and `.fixedSize()` keeps the badge rigid when the popover
-    /// is squeezed vertically.
-    @ViewBuilder
-    private var badge: some View {
-        Image(systemName: image)
-            // A `.resizable()` symbol image has no intrinsic size and is the first thing a tight
-            // height squeezes, collapsing the icon to nothing: font-based sizing plus a fixed
-            // frame is what the badge-collapse guard in the harness protects.
-            .font(.system(size: pointSize))
-            .foregroundStyle(VizTheme.badgeGlyph(primary: primary))
-            .frame(width: VizTheme.badgeDiameter, height: VizTheme.badgeDiameter)
-            .fixedSize()
-            .background {
-                Circle()
-                    .fill(VizTheme.badgeFill(primary: primary))
-            }
+        self.shortcut = shortcut
     }
 
     func makeBody(configuration: Configuration) -> some View {
-        HStack(spacing: Self.badgeLabelGap) {
-            badge
-            configuration.label
-                .font(.footnote)
-                .foregroundStyle(.primary)
-            Spacer(minLength: 8)
-            // The hint sits at the row's trailing edge, so it never pushes the label: the label
-            // column is fixed by the badge and the gap above. It stays the app's white hint pill
-            // (an explicit earlier instruction) - the native secondary grey is a one-line change
-            // here, and BUILDING.md records that.
-            if let shortcutName {
-                ShortcutEditorView(name: shortcutName)
+        HStack {
+            Spacer()
+            VStack(alignment: .center, spacing: 10) {
+                Image(systemName: image)
+                    // A `.resizable()` symbol image has no intrinsic size, so it is the first
+                    // thing a tight popover height squeezes on macOS 27, collapsing the icon
+                    // to nothing while the labels survive. Font-based sizing keeps the symbol
+                    // at its point size, and `.fixedSize()` makes the slot rigid.
+                    .font(.system(size: pointSize))
+                    .frame(width: Self.iconSlot.width, height: Self.iconSlot.height)
+                    .fixedSize()
+                    .foregroundStyle(.primary)
+                configuration.label
+                    .font(.footnote)
+                    .foregroundStyle(.primary)
+
+                if let shortcut = shortcut {
+                    Text(shortcut.description)
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                }
             }
+            Spacer()
         }
-        .padding(.horizontal, Self.rowPadding)
-        .frame(height: Self.rowHeight)
-        // The row is the reference's row: **no fill at rest** - the panel's material shows
-        // through - and the system's unemphasized selection colour while hovered, in the
-        // reference's corner. Nothing else is drawn: no glass fill, no hand-made ring and no
-        // press scale (macOS dims or lightens a control while it is held down, it never scales).
-        .vizTileHighlight(cornerRadius: VizTheme.cornerControl, hovered: isHovered)
-        // The whole row is the hit target, as a menu row is.
-        .contentShape(Rectangle())
+        // 12 pt rather than 16: the popover is 480 pt wide, and at 16 the five buttons'
+        // intrinsic width overflowed it and the outer buttons were clipped. The vertical
+        // padding is asymmetric on purpose: the label's 13 pt line box reserves descender
+        // space below its ink, so the block needs one point less underneath to look centred.
+        .padding(.horizontal, 12)
+        .padding(.top, 8)
+        .padding(.bottom, 7)
+        // The tile carries no hand-made chrome any more. On macOS 26+ `vizGlassControl`
+        // gives it the system's interactive glass, which supplies the hover and press
+        // response itself, so no ring is drawn over it; the material fallback below macOS 26
+        // has no interactive glass and keeps one subtle hairline edge, and the hover state
+        // only brightens that edge. The press scale that used to live here is gone as well:
+        // macOS lightens or dims a control while it is held down, it never scales it.
+        // The hover timing is the system's pace for control feedback, not the 0.3 s the
+        // hand-made ring used.
+        .vizGlassControl(cornerRadius: VizTheme.cornerControl, hovered: isHovered)
+        .foregroundColor(.primary)
+        // Same continuous curve as the glass shape, so the tile's edge - glass or fallback
+        // hairline - follows one rounded rectangle instead of being squared off by a clip.
+        .clipShape(VizTheme.controlShape())
         .animation(.easeInOut(duration: Self.hoverDuration), value: isHovered)
         .onHover { inside in
             isHovered = inside
         }
     }
 }
+
+
 
 
 struct ShortcutEditorView: View {

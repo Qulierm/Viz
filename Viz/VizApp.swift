@@ -123,36 +123,14 @@ final class StatusItemController: NSObject {
     /// reopen inside this window - a later click opens the popover normally.
     static let toggleSuppressionWindow: TimeInterval = 0.3
 
-    /// The panel's corner, ported from the system's own Wi-Fi popover.
-    ///
-    /// The whole reference table is measured from a 2x screenshot of that panel (so the image
-    /// pixels are halved for points). The sampled values are the acceptance evidence; what the
-    /// code uses is the semantic system colour that produces them, so appearance, accent colour
-    /// and increased-contrast settings keep working.
-    ///
-    /// | measured on the reference        | composited value             | used instead                                                   |
-    /// | -------------------------------- | ---------------------------- | -------------------------------------------------------------- |
-    /// | panel background                 | 51,52,55 (~#333437)          | the window's `NSVisualEffectView` material (`.menu`, behind-window) |
-    /// | panel corner radius              | 14 px = ~7 pt                | `panelCornerRadius` below                                      |
-    /// | internal dividers                | 2 px = 1 pt, 73,75,77        | `NSColor.separatorColor` (white at ~11 % in dark appearance)    |
-    /// | section label text               | 133,135,137                  | `NSColor.secondaryLabelColor`                                  |
-    /// | row label text                   | 243,249,255                  | `NSColor.labelColor`                                           |
-    /// | hovered/selected row             | 71,76,86                     | `NSColor.unemphasizedSelectedContentBackgroundColor`            |
-    /// | hovered row corner radius        | ~14 px = ~5-7 pt             | the tile's hover highlight corner (continuous, ~6 pt)           |
-    /// | icon badge                       | 54 px = 27 pt circle         | the tile's circular icon badge                                  |
-    /// | active badge fill, white glyph   | 0,147,255                    | `NSColor.controlAccentColor`                                    |
-    /// | inactive badge fill, grey glyph  | 65,66,70                     | `NSColor.quaternaryLabelColor`                                  |
-    /// | outer border                     | none                         | none - separation comes from the material and the window shadow |
-    ///
-    /// The radius is deliberately smaller than the 16 pt this panel used before: the reference
-    /// arc reaches the panel's left edge 14 px (7 pt) down, and anything rounder reads as a
-    /// different family next to it. The curve stays the system's continuous (squircle) one
-    /// rather than a `CALayer`'s default circular curve. The **outer edge is gone**: the
-    /// reference panel draws no border at all - the only hairlines in it are its internal
-    /// dividers - so the panel separates from the desktop through its material and its shadow.
-    /// How the panel sits next to the reference by eye is checked against the on-screen list in
-    /// BUILDING.md; the harness cannot photograph a behind-window material.
-    static let panelCornerRadius: CGFloat = 7
+    /// Native panel chrome. AppKit exposes no API for the system's panel radius, so this
+    /// follows the radius family the system's own menu-bar panels use on this OS generation;
+    /// the curve is the system's continuous (squircle) curve rather than a `CALayer`'s default
+    /// circular one, and the 0.5 pt edge is the separator hairline the system's own panels
+    /// draw instead of a coloured stroke. How the panel sits next to those panels by eye is
+    /// checked against the on-screen list in BUILDING.md - the harness cannot photograph it.
+    static let panelCornerRadius: CGFloat = 16
+    static let panelBorderWidth: CGFloat = 0.5
     /// The panel's appearance animation: short, so it reads as the system's own pace. The
     /// dismissal is deliberately immediate - an animated dismissal would leave `isVisible`
     /// true while it runs, which would break the toggle and suppression semantics.
@@ -438,11 +416,9 @@ final class StatusItemController: NSObject {
         effect.layer?.cornerCurve = .continuous
         effect.layer?.cornerRadius = Self.panelCornerRadius
         effect.layer?.masksToBounds = true
-        // No border: the reference panel draws no outer edge, and its separation comes from
-        // the material and the window shadow (`hasShadow` above). Anything else - the 0.5 pt
-        // separator hairline this panel used to carry - reads as a stroke the system never
-        // draws around this kind of panel.
-        effect.layer?.borderWidth = 0
+        // The system's own panel edge: a half-point separator hairline, not a stroke.
+        effect.layer?.borderWidth = Self.panelBorderWidth
+        effect.layer?.borderColor = NSColor.separatorColor.cgColor
         effect.autoresizingMask = [.width, .height]
 
         let hosting = NSHostingView(rootView: popoverContent)
@@ -455,10 +431,7 @@ final class StatusItemController: NSObject {
         return panel
     }
 
-    /// The popover's width: a vertical menu family width. The reference Wi-Fi panel measures
-    /// 313 pt (626 px at 2x); 300 pt sits in that family and leaves the rows' right-aligned
-    /// hints a comfortable trailing edge.
-    static let popoverWidth: CGFloat = 300
+    static let popoverWidth: CGFloat = 480
 
     @objc private func openSettings() {
         closePopover()
